@@ -1,11 +1,11 @@
 #!/usr/bin/env python3
 """
-Enhanced Stock Predictor - With Advanced Risk Management
-✅ Uses LATEST available price from CSV (automatically gets most recent date)
-✅ Dynamic probability thresholds based on market conditions
-✅ CSV logging for analysis
-✅ Improved SPY/index download with fallbacks
-✅ Simplified output without position sizing
+Enhanced Stock Predictor v2 - Advanced Risk Management & Analysis
+✅ Improved R:R calculation (ensures > 1.5:1)
+✅ Per-stock adaptive thresholds
+✅ Better market regime detection
+✅ Comparative table format for multiple stocks
+✅ Weighted confidence scoring
 """
 
 import os
@@ -28,158 +28,410 @@ logging.getLogger('keras').setLevel(logging.ERROR)
 import tensorflow as tf
 from pathlib import Path
 from dataclasses import dataclass
-from typing import List
+from typing import List, Dict
 import argparse
 import csv
 
 tf.get_logger().setLevel('ERROR')
 
 # ============================================================================
-# DYNAMIC PROBABILITY THRESHOLDS
+# ADAPTIVE PROBABILITY THRESHOLDS (Per-Stock)
 # ============================================================================
-class ProbabilityThresholds:
-    """Dynamic risk-based probability thresholds"""
+class AdaptiveThresholds:
+    """Per-stock adaptive thresholds based on historical behavior"""
     
     @staticmethod
-    def get_dynamic_threshold(volatility: float, market_regime: str) -> dict:
+    def calculate_stock_threshold(df: pd.DataFrame, volatility: float, market_regime: str) -> dict:
         """
-        Dynamic thresholds based on market conditions
-        - High volatility = require higher probability
-        - Bear market = require higher probability
-        - Bull market = can accept slightly lower probability
+        Calculate adaptive threshold per stock based on:
+        - Stock's historical volatility pattern
+        - Market regime
+        - Trend consistency
         """
-        base_threshold = 0.60
+        base_threshold = 0.58  # Slightly lower base
         
-        # Volatility adjustment
-        if volatility > 0.04:  # Very high volatility
-            vol_adj = 0.08
-        elif volatility > 0.03:  # High volatility
-            vol_adj = 0.05
-        elif volatility > 0.02:  # Moderate volatility
-            vol_adj = 0.03
-        else:  # Low volatility
-            vol_adj = 0.00
+        # Historical volatility pattern (last 60 days)
+        if len(df) >= 60:
+            recent_vol = df['close'].pct_change().iloc[-60:].std()
+            long_vol = df['close'].pct_change().std()
+            vol_ratio = recent_vol / long_vol if long_vol > 0 else 1.0
+            
+            # If recent volatility much higher than normal, be more conservative
+            if vol_ratio > 1.5:
+                vol_adj = 0.06
+            elif vol_ratio > 1.2:
+                vol_adj = 0.04
+            elif vol_ratio < 0.8:
+                vol_adj = -0.02  # More aggressive in stable periods
+            else:
+                vol_adj = 0.02
+        else:
+            # Fallback to absolute volatility
+            if volatility > 0.04:
+                vol_adj = 0.07
+            elif volatility > 0.03:
+                vol_adj = 0.05
+            elif volatility > 0.02:
+                vol_adj = 0.03
+            else:
+                vol_adj = 0.00
         
-        # Market regime adjustment
-        if "BULL STRONG" in market_regime:
-            regime_adj = -0.03  # Can be more aggressive
-        elif "BULL" in market_regime:
-            regime_adj = -0.02
-        elif "BEAR" in market_regime:
-            regime_adj = 0.05  # More conservative
-        elif "SIDEWAYS" in market_regime:
-            regime_adj = 0.03
+        # Trend consistency (helps differentiate MIXED from real trends)
+        if len(df) >= 20:
+            closes = df['close'].iloc[-20:]
+            returns = closes.pct_change().dropna()
+            
+            # Count directional consistency
+            positive_days = (returns > 0).sum()
+            trend_consistency = abs(positive_days - 10) / 10  # 0 = random, 1 = strong trend
+            
+            if trend_consistency > 0.6:  # Strong trend
+                regime_adj = -0.03  # Can be more aggressive
+            elif trend_consistency < 0.3:  # Choppy/mixed
+                regime_adj = 0.05  # Be conservative
+            else:
+                regime_adj = 0.02
         else:
             regime_adj = 0.02
         
+        # Market regime fine-tuning
+        if "BULL STRONG" in market_regime:
+            regime_adj -= 0.02
+        elif "BEAR STRONG" in market_regime:
+            regime_adj += 0.03
+        elif "MIXED" in market_regime or "SIDEWAYS" in market_regime:
+            regime_adj += 0.04  # Much more conservative in choppy markets
+        
         adjusted_threshold = base_threshold + vol_adj + regime_adj
-        adjusted_threshold = max(0.55, min(0.75, adjusted_threshold))  # Clamp between 55-75%
+        adjusted_threshold = max(0.52, min(0.75, adjusted_threshold))  # Clamp 52-75%
         
         return {
             'threshold': adjusted_threshold,
             'vol_adjustment': vol_adj,
-            'regime_adjustment': regime_adj
+            'regime_adjustment': regime_adj,
+            'trend_consistency': trend_consistency if len(df) >= 20 else 0.5
         }
     
     @staticmethod
-    def get_confidence_label(prob: float, threshold: float) -> str:
-        """Map probability to confidence with dynamic threshold"""
+    def get_confidence_label(prob: float, threshold: float) -> tuple:
+        """Return confidence label and score (0-100)"""
         margin = prob - threshold
         
-        if margin >= 0.10:
-            return "🟢 VERY HIGH"
-        elif margin >= 0.05:
-            return "🟢 HIGH"
-        elif margin >= 0.00:
-            return "🟡 MEDIUM"
-        elif margin >= -0.05:
-            return "🟠 LOW"
+        # Calculate confidence score (0-100)
+        if margin >= 0:
+            score = min(100, 50 + (margin * 200))  # Above threshold: 50-100
         else:
-            return "🔴 VERY LOW"
+            score = max(0, 50 + (margin * 200))  # Below threshold: 0-50
+        
+        # Label based on margin
+        if margin >= 0.12:
+            label = "🟢 VERY HIGH"
+        elif margin >= 0.07:
+            label = "🟢 HIGH"
+        elif margin >= 0.03:
+            label = "🟡 MEDIUM"
+        elif margin >= 0.00:
+            label = "🟡 LOW-MED"
+        elif margin >= -0.05:
+            label = "🟠 LOW"
+        else:
+            label = "🔴 VERY LOW"
+        
+        return label, score
 
 # ============================================================================
-# IMPROVED MARKET DATA FETCHING
+# ENHANCED MARKET REGIME DETECTION
 # ============================================================================
-class MarketDataFetcher:
-    """Fetch market data with fallbacks"""
+class EnhancedMarketRegime:
+    """More sophisticated regime detection"""
     
     @staticmethod
-    def fetch_market_trend(df: pd.DataFrame, retries: int = 3) -> pd.DataFrame:
-        """Fetch SPY data with multiple fallbacks"""
+    def analyze_regime(df: pd.DataFrame) -> dict:
+        """Comprehensive market regime analysis"""
+        if len(df) < 50:
+            return {
+                'regime': "⚠️ INSUFFICIENT DATA",
+                'trend_strength': 0,
+                'volatility_regime': "UNKNOWN"
+            }
         
-        # Suppress yfinance warnings
-        import logging
-        yf_logger = logging.getLogger('yfinance')
-        yf_logger.setLevel(logging.CRITICAL)
+        close = df['close'].iloc[-50:]
+        full_close = df['close']
         
-        # Try SPY first
-        for attempt in range(retries):
-            try:
-                import yfinance as yf
-                
-                # Get last 2 years of data to ensure enough for 200 EMA
-                end_date = datetime.now()
-                start_date = end_date - timedelta(days=730)
-                
-                with warnings.catch_warnings():
-                    warnings.simplefilter("ignore")
-                    market_df = yf.download(
-                        'SPY', 
-                        start=start_date,
-                        end=end_date,
-                        progress=False,
-                        timeout=10,
-                        show_errors=False
-                    )
-                
-                if not market_df.empty and len(market_df) >= 200:
-                    market_df['ema_200'] = market_df['Close'].ewm(span=200, adjust=False).mean()
-                    market_df['market_trend'] = (market_df['Close'] > market_df['ema_200']).astype(int)
-                    market_df = market_df[['market_trend']]
-                    
-                    if not isinstance(market_df.index, pd.DatetimeIndex):
-                        market_df.index = pd.to_datetime(market_df.index)
-                    
-                    df = df.join(market_df, how='left')
-                    df['market_trend'] = df['market_trend'].fillna(method='ffill').fillna(1).astype(int)
-                    
-                    return df
-                    
-            except Exception as e:
-                if attempt < retries - 1:
-                    continue
+        # Moving averages
+        ma_20 = close.iloc[-20:].mean()
+        ma_50 = close.mean()
+        ma_200 = full_close.mean() if len(full_close) >= 200 else ma_50
         
-        # Fallback 1: Try QQQ
-        try:
-            import yfinance as yf
-            with warnings.catch_warnings():
-                warnings.simplefilter("ignore")
-                market_df = yf.download('QQQ', period="2y", progress=False, timeout=10, show_errors=False)
-            
-            if not market_df.empty and len(market_df) >= 200:
-                market_df['ema_200'] = market_df['Close'].ewm(span=200, adjust=False).mean()
-                market_df['market_trend'] = (market_df['Close'] > market_df['ema_200']).astype(int)
-                market_df = market_df[['market_trend']]
-                
-                if not isinstance(market_df.index, pd.DatetimeIndex):
-                    market_df.index = pd.to_datetime(market_df.index)
-                
-                df = df.join(market_df, how='left')
-                df['market_trend'] = df['market_trend'].fillna(method='ffill').fillna(1).astype(int)
-                
-                return df
-        except:
-            pass
+        current = close.iloc[-1]
         
-        # Fallback 2: Use stock's own trend (silent fallback)
-        df['ema_200'] = df['close'].ewm(span=200, adjust=False).mean()
-        df['market_trend'] = (df['close'] > df['ema_200']).astype(int)
-        df = df.drop('ema_200', axis=1)
+        # Volatility analysis
+        vol_20d = close.pct_change().iloc[-20:].std() * 100
+        vol_50d = close.pct_change().std() * 100
         
-        return df
+        # Trend strength (linear regression slope)
+        x = np.arange(len(close))
+        y = close.values
+        slope = np.polyfit(x, y, 1)[0]
+        trend_strength = abs(slope) / current * 100  # % per day
+        
+        # Directional consistency
+        returns = close.pct_change().dropna()
+        positive_days = (returns > 0).sum()
+        consistency = abs(positive_days - len(returns)/2) / (len(returns)/2)
+        
+        # Determine volatility regime
+        if vol_20d < 1.5:
+            vol_regime = "LOW VOL"
+        elif vol_20d < 2.5:
+            vol_regime = "NORMAL VOL"
+        elif vol_20d < 4.0:
+            vol_regime = "HIGH VOL"
+        else:
+            vol_regime = "EXTREME VOL"
+        
+        # Determine trend regime with more precision
+        if trend_strength > 0.15 and consistency > 0.4:  # Strong persistent trend
+            if current > ma_20 > ma_50 and slope > 0:
+                regime = "🚀 BULL STRONG"
+            elif current < ma_20 < ma_50 and slope < 0:
+                regime = "📉 BEAR STRONG"
+            else:
+                regime = "🔄 TRANSITIONING"
+        elif trend_strength > 0.08 and consistency > 0.25:  # Moderate trend
+            if current > ma_50 and slope > 0:
+                regime = "📈 BULL"
+            elif current < ma_50 and slope < 0:
+                regime = "📉 BEAR"
+            else:
+                regime = "🔄 MIXED"
+        elif consistency < 0.15:  # Very choppy
+            regime = "⚡ CHOPPY"
+        else:  # Sideways
+            regime = "⚖️ SIDEWAYS"
+        
+        return {
+            'regime': regime,
+            'trend_strength': trend_strength,
+            'consistency': consistency,
+            'volatility_regime': vol_regime,
+            'vol_20d': vol_20d
+        }
 
 # ============================================================================
-# TECHNICAL INDICATORS
+# IMPROVED RISK MANAGEMENT
+# ============================================================================
+class ImprovedRiskManagement:
+    """Enhanced risk management ensuring R:R > 1.5"""
+    
+    @staticmethod
+    def calculate_optimal_levels(current_price: float, 
+                                 atr: float, 
+                                 volatility: float,
+                                 direction_prob: float,
+                                 trend_strength: float) -> dict:
+        """
+        Calculate targets and stops ensuring R:R > 1.5:1
+        - Adjusts stop-loss to be tighter or targets to be wider
+        - Uses trend strength to scale targets
+        """
+        
+        # Base multipliers
+        if direction_prob > 0.5:  # UP signal
+            # Target multipliers based on confidence and trend
+            conf_multiplier = 1.0 + (direction_prob - 0.5) * 2  # 1.0 to 2.0
+            trend_multiplier = 1.0 + min(trend_strength * 5, 0.5)  # Up to 1.5x
+            
+            target_multiplier = conf_multiplier * trend_multiplier
+            
+            target_high = current_price + (atr * 2.0 * target_multiplier)
+            target_low = current_price + (atr * 0.8 * target_multiplier)
+            
+            # Initial stop
+            stop_loss = current_price - (atr * 1.2)
+            
+            # Check R:R and adjust
+            avg_target = (target_high + target_low) / 2
+            upside = avg_target - current_price
+            downside = current_price - stop_loss
+            initial_rr = upside / downside if downside > 0 else 0
+            
+            # If R:R < 1.5, tighten stop or widen target
+            if initial_rr < 1.5 and downside > 0:
+                # Prioritize tightening stop-loss first
+                required_downside = upside / 1.5
+                stop_loss = current_price - required_downside
+                
+                # But don't make stop too tight (min 0.8 ATR)
+                min_stop = current_price - (atr * 0.8)
+                if stop_loss > min_stop:
+                    stop_loss = min_stop
+                    # If stop is at minimum, widen targets instead
+                    required_upside = downside * 1.5
+                    center = current_price + required_upside
+                    target_high = center + (atr * 0.6)
+                    target_low = center - (atr * 0.3)
+        
+        else:  # DOWN signal
+            conf_multiplier = 1.0 + (0.5 - direction_prob) * 2
+            trend_multiplier = 1.0 + min(trend_strength * 5, 0.5)
+            
+            target_multiplier = conf_multiplier * trend_multiplier
+            
+            target_low = current_price - (atr * 2.0 * target_multiplier)
+            target_high = current_price - (atr * 0.8 * target_multiplier)
+            
+            stop_loss = current_price + (atr * 1.2)
+            
+            avg_target = (target_high + target_low) / 2
+            upside = current_price - avg_target
+            downside = stop_loss - current_price
+            initial_rr = upside / downside if downside > 0 else 0
+            
+            if initial_rr < 1.5 and downside > 0:
+                required_downside = upside / 1.5
+                stop_loss = current_price + required_downside
+                
+                max_stop = current_price + (atr * 0.8)
+                if stop_loss < max_stop:
+                    stop_loss = max_stop
+                    required_upside = downside * 1.5
+                    center = current_price - required_upside
+                    target_low = center - (atr * 0.6)
+                    target_high = center + (atr * 0.3)
+        
+        # Final calculations
+        avg_target = (target_high + target_low) / 2
+        upside_risk = abs(avg_target - current_price)
+        downside_risk = abs(current_price - stop_loss)
+        final_rr = upside_risk / downside_risk if downside_risk > 0 else 0
+        
+        target_return = (avg_target - current_price) / current_price * 100
+        max_loss = abs(current_price - stop_loss) / current_price * 100
+        
+        return {
+            'target_high': target_high,
+            'target_low': target_low,
+            'stop_loss': stop_loss,
+            'risk_reward': final_rr,
+            'expected_return': target_return,
+            'max_loss': max_loss,
+            'atr_pct': (atr / current_price) * 100
+        }
+
+# ============================================================================
+# WEIGHTED DECISION SCORING
+# ============================================================================
+class WeightedDecisionEngine:
+    """Score-based decision making"""
+    
+    @staticmethod
+    def calculate_signal_score(pred_data: dict) -> dict:
+        """
+        Calculate weighted score (0-100) for trade decision
+        Factors:
+        - Probability margin: 40%
+        - Risk-reward: 25%
+        - Market alignment: 20%
+        - Volatility: 15%
+        """
+        score = 0
+        breakdown = {}
+        
+        # 1. Probability margin (40 points)
+        prob_margin = pred_data['week_prob_up'] - pred_data['threshold']
+        if prob_margin >= 0.10:
+            prob_score = 40
+        elif prob_margin >= 0.05:
+            prob_score = 32
+        elif prob_margin >= 0.02:
+            prob_score = 25
+        elif prob_margin >= 0:
+            prob_score = 18
+        elif prob_margin >= -0.03:
+            prob_score = 10
+        else:
+            prob_score = 0
+        
+        score += prob_score
+        breakdown['probability'] = prob_score
+        
+        # 2. Risk-reward (25 points)
+        rr = pred_data['risk_reward']
+        if rr >= 2.5:
+            rr_score = 25
+        elif rr >= 2.0:
+            rr_score = 20
+        elif rr >= 1.5:
+            rr_score = 15
+        elif rr >= 1.0:
+            rr_score = 8
+        else:
+            rr_score = 0
+        
+        score += rr_score
+        breakdown['risk_reward'] = rr_score
+        
+        # 3. Market alignment (20 points)
+        regime = pred_data['market_regime']
+        direction = pred_data['week_direction']
+        
+        if ("BULL STRONG" in regime and "UP" in direction) or \
+           ("BEAR STRONG" in regime and "DOWN" in direction):
+            market_score = 20
+        elif ("BULL" in regime and "UP" in direction) or \
+             ("BEAR" in regime and "DOWN" in direction):
+            market_score = 15
+        elif "CHOPPY" in regime or "MIXED" in regime:
+            market_score = 5
+        elif "SIDEWAYS" in regime:
+            market_score = 8
+        else:
+            market_score = 0
+        
+        score += market_score
+        breakdown['market_alignment'] = market_score
+        
+        # 4. Volatility favorability (15 points)
+        vol = pred_data['volatility']
+        if vol < 0.02:  # Low vol - ideal
+            vol_score = 15
+        elif vol < 0.03:  # Moderate
+            vol_score = 12
+        elif vol < 0.04:  # High
+            vol_score = 7
+        else:  # Very high
+            vol_score = 2
+        
+        score += vol_score
+        breakdown['volatility'] = vol_score
+        
+        # Determine action based on score
+        if score >= 75:
+            action = "🟢 STRONG BUY" if "UP" in direction else "🔴 STRONG SELL"
+            signal = "EXCELLENT"
+        elif score >= 65:
+            action = "🟢 BUY" if "UP" in direction else "🔴 SELL"
+            signal = "GOOD"
+        elif score >= 55:
+            action = "⚡ CAUTIOUS BUY" if "UP" in direction else "⚡ CAUTIOUS SELL"
+            signal = "MARGINAL"
+        elif score >= 45:
+            action = "⏸️ WAIT"
+            signal = "WEAK"
+        else:
+            action = "❌ NO TRADE"
+            signal = "REJECTED"
+        
+        return {
+            'score': score,
+            'action': action,
+            'signal_strength': signal,
+            'breakdown': breakdown
+        }
+
+# ============================================================================
+# TECHNICAL INDICATORS (unchanged)
 # ============================================================================
 def calculate_atr(df: pd.DataFrame, period: int = 14) -> pd.Series:
     high = df['high']
@@ -225,80 +477,48 @@ def calculate_adx(df: pd.DataFrame, period: int = 14) -> pd.Series:
     return adx.fillna(0)
 
 # ============================================================================
-# MARKET REGIME DETECTION
+# MARKET DATA FETCHER (unchanged)
 # ============================================================================
-class MarketRegime:
-    """Detect bull/bear/sideways market"""
-    
+class MarketDataFetcher:
     @staticmethod
-    def get_regime(df: pd.DataFrame) -> str:
-        """Determine market regime"""
-        if len(df) < 50:
-            return "UNKNOWN"
+    def fetch_market_trend(df: pd.DataFrame, retries: int = 3) -> pd.DataFrame:
+        import logging
+        yf_logger = logging.getLogger('yfinance')
+        yf_logger.setLevel(logging.CRITICAL)
         
-        close = df['close'].iloc[-50:]
+        for attempt in range(retries):
+            try:
+                import yfinance as yf
+                end_date = datetime.now()
+                start_date = end_date - timedelta(days=730)
+                
+                with warnings.catch_warnings():
+                    warnings.simplefilter("ignore")
+                    market_df = yf.download('SPY', start=start_date, end=end_date, 
+                                          progress=False, timeout=10, show_errors=False)
+                
+                if not market_df.empty and len(market_df) >= 200:
+                    market_df['ema_200'] = market_df['Close'].ewm(span=200, adjust=False).mean()
+                    market_df['market_trend'] = (market_df['Close'] > market_df['ema_200']).astype(int)
+                    market_df = market_df[['market_trend']]
+                    
+                    if not isinstance(market_df.index, pd.DatetimeIndex):
+                        market_df.index = pd.to_datetime(market_df.index)
+                    
+                    df = df.join(market_df, how='left')
+                    df['market_trend'] = df['market_trend'].fillna(method='ffill').fillna(1).astype(int)
+                    return df
+            except:
+                if attempt < retries - 1:
+                    continue
         
-        ma_50 = close.mean()
-        ma_200 = df['close'].mean() if len(df) >= 200 else close.mean()
-        
-        current = close.iloc[-1]
-        
-        volatility = df['close'].pct_change().std() * 100
-        
-        if current > ma_50 > ma_200 and volatility < 2.5:
-            return "📈 BULL STRONG"
-        elif current > ma_50 and volatility < 3:
-            return "📈 BULL"
-        elif current < ma_50 < ma_200 and volatility < 2.5:
-            return "📉 BEAR STRONG"
-        elif current < ma_50 and volatility < 3:
-            return "📉 BEAR"
-        elif abs(current - ma_50) < (ma_50 * 0.02) and volatility < 1.5:
-            return "⚖️ SIDEWAYS"
-        else:
-            return "🔄 MIXED"
+        df['ema_200'] = df['close'].ewm(span=200, adjust=False).mean()
+        df['market_trend'] = (df['close'] > df['ema_200']).astype(int)
+        df = df.drop('ema_200', axis=1)
+        return df
 
 # ============================================================================
-# RISK MANAGEMENT
-# ============================================================================
-class RiskManagement:
-    """Calculate realistic targets and stop-losses"""
-    
-    @staticmethod
-    def calculate_targets(current_price: float, 
-                         atr: float, 
-                         volatility: float,
-                         direction_prob: float) -> dict:
-        """Use ATR for realistic targets"""
-        
-        if direction_prob > 0.5:  # UP signal
-            target_high = current_price + (atr * 1.5)
-            target_low = current_price + (atr * 0.5)
-            stop_loss = current_price - (atr * 1.0)
-        else:  # DOWN signal
-            target_low = current_price - (atr * 1.5)
-            target_high = current_price - (atr * 0.5)
-            stop_loss = current_price + (atr * 1.0)
-        
-        upside_risk = abs(target_high - current_price)
-        downside_risk = abs(current_price - stop_loss)
-        risk_reward = upside_risk / downside_risk if downside_risk > 0 else 0
-        
-        target_return = ((target_high + target_low) / 2 - current_price) / current_price * 100
-        max_loss = abs(current_price - stop_loss) / current_price * 100
-        
-        return {
-            'target_high': target_high,
-            'target_low': target_low,
-            'stop_loss': stop_loss,
-            'risk_reward': risk_reward,
-            'expected_return': target_return,
-            'max_loss': max_loss,
-            'atr_pct': (atr / current_price) * 100
-        }
-
-# ============================================================================
-# FEATURE ENGINEERING
+# FEATURE ENGINEERING (unchanged)
 # ============================================================================
 def create_prediction_features(df: pd.DataFrame) -> pd.DataFrame:
     df = df.copy()
@@ -342,10 +562,10 @@ def create_prediction_features(df: pd.DataFrame) -> pd.DataFrame:
     return df
 
 # ============================================================================
-# PREDICTION DATA CLASS
+# ENHANCED PREDICTION DATA CLASS
 # ============================================================================
 @dataclass
-class StockPrediction:
+class EnhancedStockPrediction:
     symbol: str
     current_price: float
     price_date: str
@@ -353,6 +573,7 @@ class StockPrediction:
     week_prob_up: float
     week_direction: str
     confidence: str
+    confidence_score: float
     
     target_high: float
     target_low: float
@@ -362,23 +583,26 @@ class StockPrediction:
     max_loss: float
     
     market_regime: str
-    atr_pct: float
+    trend_strength: float
     volatility: float
+    volatility_regime: str
+    atr_pct: float
     
-    dynamic_threshold: float
+    adaptive_threshold: float
+    threshold_breakdown: dict
     
+    signal_score: float
     action: str
     signal_strength: str
+    score_breakdown: dict
+    
     reasoning: List[str]
     warnings: List[str]
 
 # ============================================================================
-# PREDICTION ENGINE
+# DATA LOADING (unchanged)
 # ============================================================================
 def load_and_prepare_data(symbol: str):
-    """Load data from local CSV and automatically use the LATEST date available"""
-    
-    # Try multiple possible CSV locations
     csv_paths = [
         Path(f"data/stock_data/{symbol}.csv"),
         Path(f"data/{symbol}.csv"),
@@ -390,34 +614,29 @@ def load_and_prepare_data(symbol: str):
     df = None
     csv_found = None
     
-    # Try to load from CSV first
     for csv_path in csv_paths:
         if csv_path.exists():
             try:
-                # Read CSV without setting index initially
                 df = pd.read_csv(csv_path)
                 csv_found = csv_path
                 print(f" [Loading from: {csv_path}]", end="")
                 break
-            except Exception as e:
+            except:
                 continue
     
-    # If CSV not found, fall back to fetch_stock_data
     if df is None:
         sys.path.append(str(Path(__file__).parent))
         try:
             from src.data_loader import fetch_stock_data
             df = fetch_stock_data(symbol, use_cache=True)
         except:
-            raise ValueError(f"Could not load data for {symbol}. CSV not found in: {[str(p) for p in csv_paths]}")
+            raise ValueError(f"Could not load data for {symbol}")
     
     if df.empty:
         raise ValueError(f"Could not fetch data for {symbol}")
     
-    # Normalize column names to lowercase FIRST
     df.columns = df.columns.str.lower()
     
-    # Handle date column - try different possible names
     date_columns = ['date', 'datetime', 'timestamp', 'time']
     date_col = None
     
@@ -426,55 +645,43 @@ def load_and_prepare_data(symbol: str):
             date_col = col
             break
     
-    # If no date column found, check if first column looks like dates
     if date_col is None and len(df.columns) > 0:
         first_col = df.columns[0]
-        # Check if first column contains date-like strings
         if df[first_col].astype(str).str.match(r'^\d{4}-\d{2}-\d{2}').any():
             date_col = first_col
     
     if date_col:
-        # Parse dates and set as index
         df[date_col] = pd.to_datetime(df[date_col], errors='coerce')
-        df = df.dropna(subset=[date_col])  # Remove rows with invalid dates
+        df = df.dropna(subset=[date_col])
         df.set_index(date_col, inplace=True)
     elif not isinstance(df.index, pd.DatetimeIndex):
-        # Try to convert index to datetime
         try:
             df.index = pd.to_datetime(df.index, errors='coerce')
-            df = df[df.index.notna()]  # Remove rows with invalid dates
+            df = df[df.index.notna()]
         except:
             raise ValueError(f"Could not parse dates from CSV for {symbol}")
     
-    # Remove timezone if present
     if df.index.tz is not None:
         df.index = df.index.tz_localize(None)
     
-    # Sort by date to ensure latest is at the end
     df = df.sort_index()
-    
-    # Remove any duplicate dates (keep last)
     df = df[~df.index.duplicated(keep='last')]
     
-    # Debug: Print the actual latest date in CSV
     if len(df) > 0:
         print(f" [{len(df)} rows, latest: {df.index[-1].strftime('%Y-%m-%d')}]", end="")
     else:
         raise ValueError(f"No valid data found in CSV for {symbol}")
     
-    # Ensure required columns exist
     required_cols = ['open', 'high', 'low', 'close', 'volume']
     missing_cols = [col for col in required_cols if col not in df.columns]
     if missing_cols:
-        raise ValueError(f"Missing required columns in CSV: {missing_cols}. Found: {list(df.columns)}")
+        raise ValueError(f"Missing required columns: {missing_cols}")
     
-    # Convert numeric columns to float (they might be strings in CSV)
     numeric_cols = ['open', 'high', 'low', 'close', 'volume']
     for col in numeric_cols:
         if col in df.columns:
             df[col] = pd.to_numeric(df[col], errors='coerce')
     
-    # Remove rows with NaN values in required columns
     df = df.dropna(subset=required_cols)
     
     if len(df) == 0:
@@ -491,8 +698,11 @@ def load_and_prepare_data(symbol: str):
     
     return df, feature_cols
 
-def predict_stock(symbol: str) -> StockPrediction:
-    """Make prediction with full risk management - uses LATEST price from CSV"""
+# ============================================================================
+# ENHANCED PREDICTION ENGINE
+# ============================================================================
+def predict_stock_enhanced(symbol: str) -> EnhancedStockPrediction:
+    """Enhanced prediction with all improvements"""
     symbol = symbol.upper()
     
     model_paths = [
@@ -512,23 +722,24 @@ def predict_stock(symbol: str) -> StockPrediction:
     
     model = tf.keras.models.load_model(str(model_path))
     
-    # Load data - will automatically get the latest available date
     df, feature_cols = load_and_prepare_data(symbol)
     
-    # Get LATEST price and date from CSV (automatically uses the most recent row)
     current_price = float(df['close'].iloc[-1])
     price_date = df.index[-1].strftime('%Y-%m-%d')
     current_atr = float(df['atr'].iloc[-1]) or 1.0
     current_volatility = float(df['volatility'].iloc[-1]) or 0.02
     
-    # Market regime
-    market_regime = MarketRegime.get_regime(df)
+    # Enhanced market regime
+    regime_analysis = EnhancedMarketRegime.analyze_regime(df)
+    market_regime = regime_analysis['regime']
+    trend_strength = regime_analysis['trend_strength']
+    volatility_regime = regime_analysis['volatility_regime']
     
-    # Dynamic threshold
-    threshold_info = ProbabilityThresholds.get_dynamic_threshold(
-        current_volatility, market_regime
+    # Adaptive threshold per stock
+    threshold_info = AdaptiveThresholds.calculate_stock_threshold(
+        df, current_volatility, market_regime
     )
-    dynamic_threshold = threshold_info['threshold']
+    adaptive_threshold = threshold_info['threshold']
     
     # Prepare features
     from sklearn.preprocessing import RobustScaler
@@ -554,62 +765,80 @@ def predict_stock(symbol: str) -> StockPrediction:
     week_direction = "UP" if week_prob_up > 0.5 else "DOWN"
     week_direction_emoji = "📈 UP" if week_direction == "UP" else "📉 DOWN"
     
-    # Confidence
-    confidence = ProbabilityThresholds.get_confidence_label(week_prob_up, dynamic_threshold)
-    
-    # Risk management
-    risk_mgmt = RiskManagement.calculate_targets(
-        current_price, current_atr, current_volatility, week_prob_up
+    # Confidence with score
+    confidence, confidence_score = AdaptiveThresholds.get_confidence_label(
+        week_prob_up, adaptive_threshold
     )
     
-    # Decision logic
+    # Improved risk management
+    risk_mgmt = ImprovedRiskManagement.calculate_optimal_levels(
+        current_price, current_atr, current_volatility, week_prob_up, trend_strength
+    )
+    
+    # Weighted decision scoring
+    pred_data = {
+        'week_prob_up': week_prob_up,
+        'threshold': adaptive_threshold,
+        'risk_reward': risk_mgmt['risk_reward'],
+        'market_regime': market_regime,
+        'week_direction': week_direction,
+        'volatility': current_volatility
+    }
+    decision = WeightedDecisionEngine.calculate_signal_score(pred_data)
+    
+    # Reasoning and warnings
     reasoning = []
     warnings = []
     
-    prob_margin = week_prob_up - dynamic_threshold
+    prob_margin = week_prob_up - adaptive_threshold
     
-    if prob_margin <= 0:
-        reasoning.append(f"❌ Probability too low ({week_prob_up:.1%} < {dynamic_threshold:.1%} threshold)")
-        action = "❌ NO TRADE"
-        signal_strength = "REJECTED"
+    # Probability assessment
+    if prob_margin > 0.07:
+        reasoning.append(f"✅ Strong probability ({week_prob_up:.1%} >> {adaptive_threshold:.1%} threshold)")
+    elif prob_margin > 0:
+        reasoning.append(f"✅ Probability above threshold ({week_prob_up:.1%} > {adaptive_threshold:.1%})")
     else:
-        signal_strength = "VALID"
-        reasoning.append(f"✅ Probability above threshold ({week_prob_up:.1%} > {dynamic_threshold:.1%})")
-        
-        if risk_mgmt['risk_reward'] < 1.5:
-            reasoning.append(f"⚠️ Poor risk-reward ({risk_mgmt['risk_reward']:.2f}:1 < 1.5:1)")
-            warnings.append(f"Risk-reward below 1.5:1")
-        else:
-            reasoning.append(f"✅ Good risk-reward ({risk_mgmt['risk_reward']:.2f}:1)")
-        
-        if "BULL" in market_regime and week_direction == "UP":
-            reasoning.append(f"✅ Aligned with bull market")
-        elif "BEAR" in market_regime and week_direction == "DOWN":
-            reasoning.append(f"✅ Aligned with bear market")
-        elif "SIDEWAYS" in market_regime:
-            warnings.append("Market is sideways - choppy trading expected")
-            reasoning.append(f"⚠️ Sideways market detected")
-        else:
-            warnings.append("Signal conflicts with market regime")
-        
-        if current_volatility > 0.03:
-            warnings.append(f"High volatility ({current_volatility*100:.1f}%)")
-        
-        if signal_strength == "VALID" and len(warnings) == 0:
-            action = f"🟢 BUY" if week_direction == "UP" else f"🔴 SELL"
-        elif signal_strength == "VALID" and len(warnings) <= 1:
-            action = f"⚡ CAUTION BUY" if week_direction == "UP" else f"⚡ CAUTION SELL"
-        else:
-            action = "⏸️ WAIT"
-            reasoning.append(f"❌ Too many warnings")
+        reasoning.append(f"❌ Probability too low ({week_prob_up:.1%} < {adaptive_threshold:.1%})")
     
-    return StockPrediction(
+    # Risk-reward assessment
+    if risk_mgmt['risk_reward'] >= 2.0:
+        reasoning.append(f"✅ Excellent R:R ({risk_mgmt['risk_reward']:.2f}:1)")
+    elif risk_mgmt['risk_reward'] >= 1.5:
+        reasoning.append(f"✅ Good R:R ({risk_mgmt['risk_reward']:.2f}:1)")
+    else:
+        reasoning.append(f"⚠️ Poor R:R ({risk_mgmt['risk_reward']:.2f}:1)")
+        warnings.append(f"Risk-reward at {risk_mgmt['risk_reward']:.2f}:1")
+    
+    # Market alignment
+    if ("BULL" in market_regime and week_direction == "UP") or \
+       ("BEAR" in market_regime and week_direction == "DOWN"):
+        reasoning.append(f"✅ Aligned with {market_regime}")
+    elif "CHOPPY" in market_regime:
+        warnings.append("Choppy market - high risk")
+        reasoning.append(f"⚠️ Choppy market detected")
+    elif "MIXED" in market_regime or "SIDEWAYS" in market_regime:
+        warnings.append("Market lacks clear direction")
+        reasoning.append(f"⚠️ {market_regime}")
+    else:
+        warnings.append("Signal conflicts with market regime")
+    
+    # Volatility check
+    if current_volatility > 0.04:
+        warnings.append(f"Very high volatility ({current_volatility*100:.1f}%)")
+    elif current_volatility > 0.03:
+        warnings.append(f"High volatility ({current_volatility*100:.1f}%)")
+    
+    # Score breakdown
+    reasoning.append(f"📊 Signal Score: {decision['score']:.0f}/100")
+    
+    return EnhancedStockPrediction(
         symbol=symbol,
         current_price=current_price,
         price_date=price_date,
         week_prob_up=week_prob_up,
         week_direction=week_direction_emoji,
         confidence=confidence,
+        confidence_score=confidence_score,
         target_high=risk_mgmt['target_high'],
         target_low=risk_mgmt['target_low'],
         stop_loss=risk_mgmt['stop_loss'],
@@ -617,11 +846,16 @@ def predict_stock(symbol: str) -> StockPrediction:
         expected_return=risk_mgmt['expected_return'],
         max_loss=risk_mgmt['max_loss'],
         market_regime=market_regime,
-        atr_pct=risk_mgmt['atr_pct'],
+        trend_strength=trend_strength,
         volatility=current_volatility,
-        dynamic_threshold=dynamic_threshold,
-        action=action,
-        signal_strength=signal_strength,
+        volatility_regime=volatility_regime,
+        atr_pct=risk_mgmt['atr_pct'],
+        adaptive_threshold=adaptive_threshold,
+        threshold_breakdown=threshold_info,
+        signal_score=decision['score'],
+        action=decision['action'],
+        signal_strength=decision['signal_strength'],
+        score_breakdown=decision['breakdown'],
         reasoning=reasoning,
         warnings=warnings
     )
@@ -629,20 +863,19 @@ def predict_stock(symbol: str) -> StockPrediction:
 # ============================================================================
 # CSV LOGGING
 # ============================================================================
-def log_to_csv(predictions: List[StockPrediction], filename: str = "predictions_log.csv"):
-    """Log predictions to CSV for analysis"""
-    
+def log_to_csv(predictions: List[EnhancedStockPrediction], filename: str = "predictions_log.csv"):
+    """Log predictions to CSV"""
     csv_path = Path(filename)
     file_exists = csv_path.exists()
     
     with open(csv_path, 'a', newline='', encoding='utf-8') as f:
         fieldnames = [
             'timestamp', 'symbol', 'price_date', 'current_price',
-            'week_prob_up', 'week_direction', 'confidence',
+            'week_prob_up', 'week_direction', 'confidence', 'confidence_score',
             'target_high', 'target_low', 'stop_loss',
             'risk_reward', 'expected_return', 'max_loss',
-            'market_regime', 'atr_pct', 'volatility',
-            'dynamic_threshold', 'action', 'signal_strength', 'warnings'
+            'market_regime', 'trend_strength', 'volatility', 'volatility_regime',
+            'adaptive_threshold', 'signal_score', 'action', 'signal_strength', 'warnings'
         ]
         
         writer = csv.DictWriter(f, fieldnames=fieldnames)
@@ -651,9 +884,9 @@ def log_to_csv(predictions: List[StockPrediction], filename: str = "predictions_
             writer.writeheader()
         
         for pred in predictions:
-            # Remove emojis for CSV compatibility
+            # Clean emojis
             week_direction_clean = pred.week_direction.replace('📈', '').replace('📉', '').strip()
-            market_regime_clean = pred.market_regime.replace('📈', '').replace('📉', '').replace('⚖️', '').replace('🔄', '').strip()
+            market_regime_clean = pred.market_regime.replace('🚀', '').replace('📈', '').replace('📉', '').replace('⚖️', '').replace('🔄', '').replace('⚡', '').strip()
             confidence_clean = pred.confidence.replace('🟢', '').replace('🟡', '').replace('🟠', '').replace('🔴', '').strip()
             action_clean = pred.action.replace('🟢', '').replace('🔴', '').replace('⚡', '').replace('❌', '').replace('⏸️', '').strip()
             
@@ -665,6 +898,7 @@ def log_to_csv(predictions: List[StockPrediction], filename: str = "predictions_
                 'week_prob_up': pred.week_prob_up,
                 'week_direction': week_direction_clean,
                 'confidence': confidence_clean,
+                'confidence_score': pred.confidence_score,
                 'target_high': pred.target_high,
                 'target_low': pred.target_low,
                 'stop_loss': pred.stop_loss,
@@ -672,9 +906,11 @@ def log_to_csv(predictions: List[StockPrediction], filename: str = "predictions_
                 'expected_return': pred.expected_return,
                 'max_loss': pred.max_loss,
                 'market_regime': market_regime_clean,
-                'atr_pct': pred.atr_pct,
+                'trend_strength': pred.trend_strength,
                 'volatility': pred.volatility,
-                'dynamic_threshold': pred.dynamic_threshold,
+                'volatility_regime': pred.volatility_regime,
+                'adaptive_threshold': pred.adaptive_threshold,
+                'signal_score': pred.signal_score,
                 'action': action_clean,
                 'signal_strength': pred.signal_strength,
                 'warnings': '; '.join(pred.warnings) if pred.warnings else ''
@@ -684,35 +920,112 @@ def log_to_csv(predictions: List[StockPrediction], filename: str = "predictions_
     print(f"\n📊 Predictions logged to: {csv_path.absolute()}")
 
 # ============================================================================
-# DISPLAY FUNCTIONS
+# ENHANCED DISPLAY - COMPARATIVE TABLE
 # ============================================================================
-def print_detailed(pred: StockPrediction):
-    """Print detailed prediction - SIMPLIFIED"""
+def print_comparative_table(predictions: List[EnhancedStockPrediction]):
+    """Compact comparative table for multiple stocks"""
+    
+    print("\n" + "="*165)
+    print("📊 STOCK COMPARISON TABLE - ENHANCED ANALYSIS")
+    print("="*165)
+    
+    # Header
+    header = (
+        f"{'Stock':<7} "
+        f"{'Date':<11} "
+        f"{'Price':<10} "
+        f"{'Dir':<8} "
+        f"{'Prob':<7} "
+        f"{'Thresh':<7} "
+        f"{'Conf':<14} "
+        f"{'Score':<6} "
+        f"{'Targets':<18} "
+        f"{'R:R':<6} "
+        f"{'Regime':<17} "
+        f"{'Action':<18}"
+    )
+    print(header)
+    print("-"*165)
+    
+    # Rows
+    for p in predictions:
+        # Shorten labels for table
+        dir_short = "📈UP" if "UP" in p.week_direction else "📉DN"
+        conf_short = p.confidence.replace(' HIGH', '').replace(' MEDIUM', '').replace(' LOW', '')
+        regime_short = p.market_regime[:15]
+        
+        row = (
+            f"{p.symbol:<7} "
+            f"{p.price_date:<11} "
+            f"${p.current_price:<9.2f} "
+            f"{dir_short:<8} "
+            f"{p.week_prob_up:<6.1%} "
+            f"{p.adaptive_threshold:<6.1%} "
+            f"{conf_short:<14} "
+            f"{p.signal_score:<5.0f} "
+            f"${p.target_low:.0f}-${p.target_high:.0f}     "
+            f"{p.risk_reward:<5.2f} "
+            f"{regime_short:<17} "
+            f"{p.action:<18}"
+        )
+        print(row)
+    
+    print("="*165)
+    
+    # Summary stats
+    trades = sum(1 for p in predictions if "BUY" in p.action or "SELL" in p.action)
+    strong_signals = sum(1 for p in predictions if p.signal_score >= 75)
+    rejected = sum(1 for p in predictions if "NO TRADE" in p.action)
+    
+    print(f"\n📈 SUMMARY:")
+    print(f"   Total Analyzed: {len(predictions)}")
+    print(f"   🟢 Trade Signals: {trades} ({trades/len(predictions)*100:.0f}%)")
+    print(f"   ⭐ Strong Signals (Score ≥75): {strong_signals}")
+    print(f"   ❌ Rejected: {rejected}")
+    print(f"   Average Score: {np.mean([p.signal_score for p in predictions]):.1f}/100")
+    print(f"   Average R:R: {np.mean([p.risk_reward for p in predictions]):.2f}:1")
+    print(f"   Average Probability: {np.mean([p.week_prob_up for p in predictions]):.1%}")
+    
+    # Best opportunities
+    if trades > 0:
+        trade_preds = [p for p in predictions if "BUY" in p.action or "SELL" in p.action]
+        best = max(trade_preds, key=lambda x: x.signal_score)
+        print(f"\n🏆 BEST OPPORTUNITY: {best.symbol} (Score: {best.signal_score:.0f}, R:R: {best.risk_reward:.2f}:1)")
+    
+    print("="*165 + "\n")
+
+def print_detailed_analysis(pred: EnhancedStockPrediction):
+    """Detailed individual stock analysis"""
     print("\n" + "="*110)
-    print(f"🔮 {pred.symbol} - WEEKLY PREDICTION (Latest Data: {pred.price_date})")
+    print(f"🔍 {pred.symbol} - DETAILED ANALYSIS (Data: {pred.price_date})")
     print("="*110)
     
-    print(f"\n{'CURRENT SITUATION':─^110}")
-    print(f"Price:        ${pred.current_price:.2f}")
-    print(f"Data Date:    {pred.price_date}")
-    print(f"Direction:    {pred.week_direction} (Probability: {pred.week_prob_up:.1%})")
-    print(f"Confidence:   {pred.confidence}")
-    print(f"Threshold:    {pred.dynamic_threshold:.1%} (dynamic)")
-    print(f"Volatility:   {pred.volatility*100:.2f}% | ATR: {pred.atr_pct:.2f}%")
-    print(f"Market:       {pred.market_regime}")
+    print(f"\n{'MARKET SITUATION':─^110}")
+    print(f"Current Price:    ${pred.current_price:.2f}")
+    print(f"Direction:        {pred.week_direction} (Probability: {pred.week_prob_up:.1%})")
+    print(f"Confidence:       {pred.confidence} (Score: {pred.confidence_score:.0f}/100)")
+    print(f"Adaptive Thresh:  {pred.adaptive_threshold:.1%} (vol_adj: {pred.threshold_breakdown['vol_adjustment']:+.1%}, regime_adj: {pred.threshold_breakdown['regime_adjustment']:+.1%})")
+    print(f"Market Regime:    {pred.market_regime} (Trend: {pred.trend_strength:.2%}/day)")
+    print(f"Volatility:       {pred.volatility*100:.2f}% ({pred.volatility_regime}) | ATR: {pred.atr_pct:.2f}%")
     
-    print(f"\n{'TARGETS & RISK MANAGEMENT':─^110}")
-    print(f"Entry:             ${pred.current_price:.2f}")
+    print(f"\n{'RISK MANAGEMENT':─^110}")
+    print(f"Entry Price:       ${pred.current_price:.2f}")
     print(f"Target Range:      ${pred.target_low:.2f} - ${pred.target_high:.2f}")
     print(f"Expected Return:   {pred.expected_return:+.2f}%")
     print(f"Stop Loss:         ${pred.stop_loss:.2f}")
     print(f"Max Loss:          -{pred.max_loss:.2f}%")
-    print(f"Risk-Reward:       {pred.risk_reward:.2f}:1")
+    print(f"Risk-Reward:       {pred.risk_reward:.2f}:1 {'✅' if pred.risk_reward >= 1.5 else '⚠️'}")
     
-    print(f"\n{'DECISION & REASONING':─^110}")
-    print(f"Action: {pred.action}")
-    print(f"Signal: {pred.signal_strength}")
+    print(f"\n{'SIGNAL ANALYSIS':─^110}")
+    print(f"Signal Score:      {pred.signal_score:.0f}/100")
+    print(f"Signal Strength:   {pred.signal_strength}")
+    print(f"Action:            {pred.action}")
     
+    print(f"\nScore Breakdown:")
+    for component, score in pred.score_breakdown.items():
+        print(f"  {component.replace('_', ' ').title():<20} {score:>3.0f} points")
+    
+    print(f"\n{'REASONING':─^110}")
     for reason in pred.reasoning:
         print(f"  {reason}")
     
@@ -723,71 +1036,35 @@ def print_detailed(pred: StockPrediction):
     
     print("="*110 + "\n")
 
-def print_portfolio(predictions: List[StockPrediction]):
-    """Print portfolio summary"""
-    print("\n" + "="*150)
-    print("📊 PORTFOLIO ANALYSIS - DYNAMIC THRESHOLDS")
-    print("="*150)
-    
-    print(f"\n{'Stock':<8} {'Date':<12} {'Price':<12} {'Dir':<10} {'Prob':<10} {'Threshold':<12} {'Target Range':<22} {'R:R':<8} {'Action':<20}")
-    print("-"*150)
-    
-    for p in predictions:
-        print(f"{p.symbol:<8} "
-              f"{p.price_date:<12} "
-              f"${p.current_price:<11.2f} "
-              f"{p.week_direction:<10} "
-              f"{p.week_prob_up:<9.1%} "
-              f"{p.dynamic_threshold:<11.1%} "
-              f"${p.target_low:.0f}-${p.target_high:.0f}         "
-              f"{p.risk_reward:<7.2f} "
-              f"{p.action:<20}")
-    
-    print("="*150)
-    
-    # Summary statistics
-    trades = sum(1 for p in predictions if "BUY" in p.action or "SELL" in p.action)
-    no_trade = sum(1 for p in predictions if "NO TRADE" in p.action or "WAIT" in p.action)
-    
-    print(f"\n📈 SUMMARY:")
-    print(f"   Total Analyzed: {len(predictions)} stocks")
-    print(f"   🟢 TRADE Signals: {trades} | ⏸️ NO TRADE: {no_trade}")
-    print(f"   Average Probability: {np.mean([p.week_prob_up for p in predictions]):.1%}")
-    print(f"   Average Risk-Reward: {np.mean([p.risk_reward for p in predictions]):.2f}:1")
-    print("="*150 + "\n")
-
 # ============================================================================
 # MAIN
 # ============================================================================
 def main():
     parser = argparse.ArgumentParser(
-        description="Enhanced Stock Predictor - Reads from LOCAL CSV files",
+        description="Enhanced Stock Predictor v2 - Advanced Risk & Analysis",
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog="""
 Examples:
   python predict.py -s AAPL
-  python predict.py -s AAPL MSFT GOOGL
+  python predict.py -s AAPL MSFT GOOGL --table
   python predict.py --portfolio
-  python predict.py --check
+  python predict.py -s AAPL --detailed
   
-Note: 
-  - The model reads from CSV files in: data/stock_data/{SYMBOL}.csv
-  - Automatically uses the LATEST date available in your CSV
-  - Update your CSV daily and the model will always use the most recent price
-  
-CSV Locations Checked (in order):
-  1. data/stock_data/AAPL.csv
-  2. data/AAPL.csv
-  3. stock_data/AAPL.csv
-  4. AAPL.csv
+Features:
+  ✅ Improved R:R calculation (ensures > 1.5:1)
+  ✅ Per-stock adaptive thresholds
+  ✅ Enhanced market regime detection
+  ✅ Weighted signal scoring (0-100)
+  ✅ Comparative table format
         """
     )
     
     parser.add_argument("-s", "--stocks", nargs="+", help="Stock symbols")
     parser.add_argument("-p", "--portfolio", action="store_true", help="Default portfolio")
-    parser.add_argument("--check", action="store_true", help="Check setup")
+    parser.add_argument("--table", action="store_true", help="Show comparative table (auto for 2+ stocks)")
+    parser.add_argument("--detailed", action="store_true", help="Show detailed analysis for each stock")
     parser.add_argument("--no-log", action="store_true", help="Don't log to CSV")
-    parser.add_argument("--refresh", action="store_true", help="Force refresh data (ignore cache)")
+    parser.add_argument("--check", action="store_true", help="Check setup")
     
     args = parser.parse_args()
     
@@ -818,7 +1095,7 @@ CSV Locations Checked (in order):
         return
     
     if args.portfolio:
-        symbols = ['AAPL', 'MSFT', 'GOOGL', 'AMZN', 'NVDA', 'TSLA']
+        symbols = ['AAPL', 'MSFT', 'GOOGL', 'AMZN', 'NVDA', 'TSLA', 'META', 'AMD']
     elif args.stocks:
         symbols = args.stocks
     else:
@@ -828,29 +1105,30 @@ CSV Locations Checked (in order):
         print("   python predict.py --check\n")
         sys.exit(1)
     
-    print(f"\n🚀 Analyzing {len(symbols)} stocks (using LATEST data from CSV)")
+    print(f"\n🚀 Analyzing {len(symbols)} stocks with Enhanced v2 Model")
     print(f"   Analysis Time: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}\n")
     
     predictions = []
     for symbol in symbols:
         try:
             print(f"   {symbol}...", end=" ", flush=True)
-            pred = predict_stock(symbol)
+            pred = predict_stock_enhanced(symbol)
             predictions.append(pred)
-            print(f"✅ (Data: {pred.price_date})")
+            print(f"✅ (Data: {pred.price_date}, Score: {pred.signal_score:.0f})")
         except Exception as e:
             print(f"❌ ({str(e)})")
     
     if not predictions:
-        print("\n❌ No predictions")
+        print("\n❌ No predictions generated")
         sys.exit(1)
     
     # Display results
-    if len(predictions) > 1:
-        print_portfolio(predictions)
+    if len(predictions) > 1 or args.table:
+        print_comparative_table(predictions)
     
-    for pred in predictions:
-        print_detailed(pred)
+    if args.detailed or len(predictions) == 1:
+        for pred in predictions:
+            print_detailed_analysis(pred)
     
     # Log to CSV
     if not args.no_log:
