@@ -1,0 +1,18 @@
+# Python
+.venv/
+__pycache__/
+*.pyc
+
+# ML artifacts
+models/
+*.h5
+
+# Environment
+.env
+
+# Frontend
+node_modules/
+
+# OS / Editor
+.vscode/
+.DS_Store
