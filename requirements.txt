@@ -1,33 +1,37 @@
-# ML
-tensorflow-cpu==2.15.0
+# =========================
+# Machine Learning
+# =========================
+tensorflow==2.15.0
 keras==2.15.0
-numpy==1.26.4
+numpy==1.24.3
 pandas==2.2.3
 scikit-learn==1.5.2
 joblib==1.4.2
 
+# =========================
 # Finance & Utilities
+# =========================
 yfinance==0.2.40
 python-dateutil==2.9.0.post0
 rich==13.5.2
+
+# =========================
+# Streamlit UI
+# =========================
 streamlit==1.38.0
+plotly==5.18.0
 markdown-it-py==3.0.0
 mdurl==0.1.2
 pygments==2.19.2
 
+# =========================
 # API
+# =========================
 fastapi==0.115.0
 uvicorn==0.30.6
 pydantic==2.9.0
 
-# Streamlit UI
-streamlit==1.38.0
-plotly==5.18.0
-rich==13.5.2
-markdown-it-py==3.0.0
-mdurl==0.1.2
-pygments==2.19.2
-
-# Compatibility pins
+# =========================
+# Compatibility
+# =========================
 protobuf<5
-typing-extensions>=4.8.0
