@@ -5,13 +5,10 @@ import plotly.graph_objects as go
 from datetime import datetime
 import pandas as pd
 import numpy as np
-<<<<<<< HEAD
 import time
 import streamlit as st
 import streamlit.components.v1 as components
 
-=======
->>>>>>> 7f11e0d5fad7694c618b678fdf960f1059cdc06a
 
 # Add project root to path
 ROOT = Path(__file__).resolve().parent
@@ -20,29 +17,16 @@ sys.path.append(str(ROOT))
 # Import your enhanced prediction module
 from predict import predict_stock_enhanced, log_to_csv
 
-<<<<<<< HEAD
 # ============================================================================
 # PAGE CONFIGURATION
 # ============================================================================
 st.set_page_config(
     page_title="🚀 AI Stock Predictor Pro",
-=======
-# Initialize session state
-if "predictions" not in st.session_state:
-    st.session_state.predictions = {}
-if "last_analysis_time" not in st.session_state:
-    st.session_state.last_analysis_time = None
-
-# Page config
-st.set_page_config(
-    page_title="📈 Stock Predictor - Enhanced v2",
->>>>>>> 7f11e0d5fad7694c618b678fdf960f1059cdc06a
     page_icon="📈",
     layout="wide",
     initial_sidebar_state="expanded",
 )
 
-<<<<<<< HEAD
 # ============================================================================
 # SESSION STATE INITIALIZATION
 # ============================================================================
@@ -67,9 +51,6 @@ st.session_state.visitor_count += 1
 # ============================================================================
 # ADVANCED FUTURISTIC CSS STYLING
 # ============================================================================
-=======
-# Modern Glassmorphism CSS
->>>>>>> 7f11e0d5fad7694c618b678fdf960f1059cdc06a
 st.markdown("""
 <style>
     /* ===== GLOBAL STYLES ===== */
@@ -79,7 +60,6 @@ st.markdown("""
         font-family: 'Inter', sans-serif;
     }
     
-<<<<<<< HEAD
     .stApp {
         background: linear-gradient(135deg, #0f0c29 0%, #302b63 50%, #24243e 100%);
         background-attachment: fixed;
@@ -149,22 +129,6 @@ st.markdown("""
         font-size: 3.5rem;
         font-weight: 900;
         background: linear-gradient(135deg, #fff 0%, #a78bfa 50%, #818cf8 100%);
-=======
-    .hero-section {
-        background: rgba(255, 255, 255, 0.1);
-        backdrop-filter: blur(20px);
-        border-radius: 24px;
-        padding: 2.5rem 2rem;
-        margin-bottom: 2rem;
-        border: 1px solid rgba(255, 255, 255, 0.2);
-        box-shadow: 0 8px 32px rgba(0, 0, 0, 0.1);
-    }
-    
-    .hero-title {
-        font-size: 2.8rem;
-        font-weight: 700;
-        background: linear-gradient(135deg, #fff 0%, #e0e7ff 100%);
->>>>>>> 7f11e0d5fad7694c618b678fdf960f1059cdc06a
         -webkit-background-clip: text;
         -webkit-text-fill-color: transparent;
         background-clip: text;
@@ -179,12 +143,8 @@ st.markdown("""
     }
     
     .hero-subtitle {
-<<<<<<< HEAD
         position: relative;
         font-size: 1.1rem;
-=======
-        font-size: 1rem;
->>>>>>> 7f11e0d5fad7694c618b678fdf960f1059cdc06a
         color: rgba(255, 255, 255, 0.8);
         font-weight: 400;
         line-height: 1.6;
@@ -192,7 +152,6 @@ st.markdown("""
         animation: subtitleSlideIn 1.4s ease-out;
     }
     
-<<<<<<< HEAD
     @keyframes subtitleSlideIn {
         from { opacity: 0; transform: translateX(-30px); }
         to { opacity: 1; transform: translateX(0); }
@@ -298,30 +257,6 @@ st.markdown("""
 .metric-label {
         font-size: 0.75rem;
         color: rgba(255, 255, 255, 0.6);
-=======
-    .glass-card {
-        background: rgba(255, 255, 255, 0.12);
-        backdrop-filter: blur(20px);
-        border-radius: 20px;
-        padding: 1.5rem;
-        border: 1px solid rgba(255, 255, 255, 0.2);
-        box-shadow: 0 8px 32px rgba(0, 0, 0, 0.1);
-        margin-bottom: 1rem;
-    }
-    
-    .metric-card {
-        background: rgba(255, 255, 255, 0.15);
-        backdrop-filter: blur(15px);
-        border-radius: 16px;
-        padding: 1.2rem;
-        border: 1px solid rgba(255, 255, 255, 0.2);
-        text-align: center;
-    }
-    
-    .metric-label {
-        font-size: 0.8rem;
-        color: rgba(255, 255, 255, 0.7);
->>>>>>> 7f11e0d5fad7694c618b678fdf960f1059cdc06a
         text-transform: uppercase;
         letter-spacing: 1.5px;
         margin-bottom: 0.8rem;
@@ -329,20 +264,14 @@ st.markdown("""
     }
     
     .metric-value {
-<<<<<<< HEAD
         font-size: 2.2rem;
         font-weight: 800;
-=======
-        font-size: 1.8rem;
-        font-weight: 700;
->>>>>>> 7f11e0d5fad7694c618b678fdf960f1059cdc06a
         color: #fff;
         text-shadow: 0 0 20px rgba(167, 139, 250, 0.5);
         margin-bottom: 0.3rem;
     }
     
     .metric-subtitle {
-<<<<<<< HEAD
         font-size: 0.8rem;
         color: rgba(255, 255, 255, 0.5);
         font-weight: 500;
@@ -643,155 +572,14 @@ st.markdown("""
         background: transparent;
         border-radius: 12px;
         color: rgba(255, 255, 255, 0.6);
-=======
-        font-size: 0.75rem;
-        color: rgba(255, 255, 255, 0.6);
-        margin-top: 0.3rem;
-    }
-    
-    .action-badge {
-        display: inline-block;
-        padding: 0.8rem 2rem;
-        border-radius: 30px;
-        font-weight: 600;
-        font-size: 1.1rem;
-        margin: 1rem 0;
-        backdrop-filter: blur(10px);
-        border: 2px solid rgba(255, 255, 255, 0.3);
-    }
-    
-    .action-strong-buy {
-        background: rgba(34, 197, 94, 0.4);
-        color: #fff;
-        box-shadow: 0 4px 15px rgba(34, 197, 94, 0.3);
-    }
-    
-    .action-buy, .action-cautious-buy {
-        background: rgba(34, 197, 94, 0.3);
-        color: #fff;
-    }
-    
-    .action-strong-sell {
-        background: rgba(239, 68, 68, 0.4);
-        color: #fff;
-        box-shadow: 0 4px 15px rgba(239, 68, 68, 0.3);
-    }
-    
-    .action-sell, .action-cautious-sell {
-        background: rgba(239, 68, 68, 0.3);
-        color: #fff;
-    }
-    
-    .action-wait {
-        background: rgba(156, 163, 175, 0.3);
-        color: #fff;
-    }
-    
-    .action-no-trade {
-        background: rgba(107, 114, 128, 0.3);
-        color: #fff;
-    }
-    
-    .warning-box {
-        background: rgba(251, 191, 36, 0.2);
-        border-left: 4px solid #fbbf24;
-        padding: 1rem;
-        border-radius: 8px;
-        margin: 0.5rem 0;
-        color: rgba(255, 255, 255, 0.9);
-    }
-    
-    .info-box {
-        background: rgba(59, 130, 246, 0.2);
-        border-left: 4px solid #3b82f6;
-        padding: 1rem;
-        border-radius: 8px;
-        margin: 0.5rem 0;
-        color: rgba(255, 255, 255, 0.9);
-    }
-    
-    .success-box {
-        background: rgba(34, 197, 94, 0.2);
-        border-left: 4px solid #22c55e;
-        padding: 1rem;
-        border-radius: 8px;
-        margin: 0.5rem 0;
-        color: rgba(255, 255, 255, 0.9);
-    }
-    
-    .score-badge {
-        display: inline-block;
-        padding: 0.5rem 1rem;
-        border-radius: 20px;
-        font-weight: 700;
-        font-size: 1.2rem;
-        margin: 0.5rem 0;
-    }
-    
-    .score-excellent {
-        background: rgba(34, 197, 94, 0.3);
-        color: #22c55e;
-        border: 2px solid rgba(34, 197, 94, 0.5);
-    }
-    
-    .score-good {
-        background: rgba(59, 130, 246, 0.3);
-        color: #3b82f6;
-        border: 2px solid rgba(59, 130, 246, 0.5);
-    }
-    
-    .score-marginal {
-        background: rgba(251, 191, 36, 0.3);
-        color: #fbbf24;
-        border: 2px solid rgba(251, 191, 36, 0.5);
-    }
-    
-    .score-weak {
-        background: rgba(239, 68, 68, 0.3);
-        color: #ef4444;
-        border: 2px solid rgba(239, 68, 68, 0.5);
-    }
-    
-    .stButton button {
-        background: rgba(255, 255, 255, 0.2);
-        border: 1px solid rgba(255, 255, 255, 0.3);
-        border-radius: 12px;
-        color: #fff;
->>>>>>> 7f11e0d5fad7694c618b678fdf960f1059cdc06a
         font-weight: 600;
         padding: 0.8rem 1.5rem;
         transition: all 0.3s ease;
     }
     
-<<<<<<< HEAD
     .stTabs [data-baseweb="tab"]:hover {
         background: rgba(167, 139, 250, 0.2);
         color: #fff;
-=======
-    .stButton button:hover {
-        background: rgba(255, 255, 255, 0.3);
-        transform: translateY(-2px);
-        box-shadow: 0 8px 16px rgba(0, 0, 0, 0.2);
-    }
-    
-    [data-testid="stSidebar"] {
-        background: rgba(255, 255, 255, 0.1);
-        backdrop-filter: blur(20px);
-    }
-    
-    .progress-bar {
-        height: 8px;
-        background: rgba(255, 255, 255, 0.2);
-        border-radius: 10px;
-        overflow: hidden;
-        margin-top: 0.5rem;
-    }
-    
-    .progress-fill {
-        height: 100%;
-        border-radius: 10px;
-        transition: width 0.3s ease;
->>>>>>> 7f11e0d5fad7694c618b678fdf960f1059cdc06a
     }
     
     .stTabs [aria-selected="true"] {
@@ -911,7 +699,6 @@ st.markdown("""
 </style>
 """, unsafe_allow_html=True)
 
-<<<<<<< HEAD
 # ============================================================================
 # HELPER FUNCTIONS
 # ============================================================================
@@ -964,14 +751,6 @@ def show_notification(message, type="success"):
     st.markdown(f"""
     <div class="notification-toast" style="border-color: {color};">
         <strong>{'✅' if type == 'success' else '❌' if type == 'error' else '⚠️'}</strong> {message}
-=======
-# Hero Section
-st.markdown("""
-<div class="hero-section">
-    <div class="hero-title">📈 Stock Predictor Pro v2</div>
-    <div class="hero-subtitle">
-        Enhanced LSTM • Adaptive Thresholds • Weighted Scoring • Market Regime Detection • R:R ≥1.5:1
->>>>>>> 7f11e0d5fad7694c618b678fdf960f1059cdc06a
     </div>
     """, unsafe_allow_html=True)
 
@@ -1021,7 +800,6 @@ st.markdown(f"""
 # HERO SECTION / HOME PAGE - COMPLETE FIX
 # ============================================================================
 
-<<<<<<< HEAD
 def render_home_page():
     """Render the landing/home page - NO CODE BLOCKS, ONLY RENDERED HTML"""
     
@@ -2837,7 +2615,6 @@ def main():
 
 if __name__ == "__main__":
     main()
-=======
 # Sidebar
 with st.sidebar:
     st.markdown("### 📊 Stock Selection")
@@ -3524,4 +3301,3 @@ with st.sidebar:
         Always paper trade first and consult professionals.</p>
     </div>
     """, unsafe_allow_html=True)
->>>>>>> 7f11e0d5fad7694c618b678fdf960f1059cdc06a
