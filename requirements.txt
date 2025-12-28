@@ -1,18 +1,16 @@
 # =========================
-# Lightweight Stock Prediction App
+# Streamlit Stock Prediction - Optimized
 # Python 3.13.9 Compatible
 # =========================
 
-# Core ML
+# Core ML (Lightweight)
 numpy>=1.26.0
 pandas>=2.0.0
 scikit-learn>=1.3.0
 joblib>=1.3.0
 
-# Lightweight Deep Learning (NOT TensorFlow - too heavy!)
-# Use ONNX Runtime instead (10x faster, 1/10 the size)
-onnxruntime>=1.17.0
-onnx>=1.15.0
+# TensorFlow (ONLY THIS - remove keras separately)
+tensorflow==2.15.0
 
 # Data & Finance
 yfinance>=0.2.32
@@ -21,7 +19,6 @@ python-dateutil>=2.8.2
 # Streamlit UI
 streamlit==1.40.0
 plotly>=5.14.0
-altair>=5.0.0
 
 # Markdown & Display
 markdown-it-py>=3.0.0
@@ -29,12 +26,6 @@ mdurl>=0.1.2
 pygments>=2.15.0
 rich>=13.0.0
 
-# Web Framework (optional)
-fastapi>=0.100.0
-uvicorn>=0.23.0
-pydantic>=2.0.0
-
 # Utilities
 setuptools>=65.0.0
 requests>=2.31.0
-wheel>=0.42.0
