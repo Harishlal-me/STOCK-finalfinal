@@ -47,10 +47,12 @@ logging.getLogger('yfinance').setLevel(logging.CRITICAL)
 # =================================================================
 # TENSORFLOW IMPORT (WITH ERROR HANDLING)
 # =================================================================
+TF_AVAILABLE = False
 try:
     import tensorflow as tf
     from tensorflow.keras.models import load_model
     TF_AVAILABLE = True
+    print("✅ TensorFlow loaded successfully")
 except ImportError as e:
     TF_AVAILABLE = False
     print(f"⚠️  Warning: TensorFlow not available - {str(e)}")
