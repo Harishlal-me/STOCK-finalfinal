@@ -7,79 +7,98 @@ Enhanced Stock Predictor v2 - Advanced Risk Management & Analysis
 ✅ Better market regime detection
 ✅ Comparative table format for multiple stocks
 ✅ Weighted confidence scoring
-
-PART 1/5: Environment Setup, Imports, and Real-Time Price Fetcher
 """
 
+# =================================================================
+# ENVIRONMENT SETUP
+# =================================================================
 import os
 os.environ['TF_CPP_MIN_LOG_LEVEL'] = '3'
 os.environ['TF_ENABLE_ONEDNN_OPTS'] = '0'
 os.environ['TF_SUPPRESS_LOGS'] = '1'
+os.environ['TF_USE_LEGACY_KERAS'] = '1'
 
 import warnings
 warnings.filterwarnings('ignore')
 
+# =================================================================
+# CORE IMPORTS
+# =================================================================
 import sys
 import numpy as np
 import pandas as pd
 from datetime import datetime, timedelta
 import time
-
 import logging
-logging.getLogger('tensorflow').setLevel(logging.ERROR)
-logging.getLogger('keras').setLevel(logging.ERROR)
-
+import csv
 from pathlib import Path
 from dataclasses import dataclass
 from typing import List, Dict
-import argparse
-import csv
-# Add this at the TOP of your predict.py (after other imports, before using TensorFlow)
+import yfinance as yf
+from sklearn.preprocessing import RobustScaler
 
-import sys
-import warnings
-warnings.filterwarnings('ignore')
+# =================================================================
+# LOGGING SETUP
+# =================================================================
+logging.getLogger('tensorflow').setLevel(logging.ERROR)
+logging.getLogger('keras').setLevel(logging.ERROR)
+logging.getLogger('yfinance').setLevel(logging.CRITICAL)
 
-# Try to import TensorFlow, fallback if not available
+# =================================================================
+# TENSORFLOW IMPORT (WITH ERROR HANDLING)
+# =================================================================
 try:
     import tensorflow as tf
+    from tensorflow.keras.models import load_model
     TF_AVAILABLE = True
-except ImportError:
+except ImportError as e:
     TF_AVAILABLE = False
-    print("⚠️ TensorFlow not available - installing...")
-    import subprocess
-    try:
-        subprocess.check_call([sys.executable, "-m", "pip", "install", "tensorflow", "-q"])
-        import tensorflow as tf
-        TF_AVAILABLE = True
-    except:
-        TF_AVAILABLE = False
-        print("❌ TensorFlow installation failed")
+    print(f"⚠️  Warning: TensorFlow not available - {str(e)}")
 
-# Then in your predict_stock_enhanced function, add this check at the start:
-def predict_stock_enhanced(symbol: str):
-    """
-    Enhanced prediction with all improvements
-    """
+# =================================================================
+# HELPER FUNCTION FOR SAFE MODEL LOADING
+# =================================================================
+def load_model_safe(model_path):
+    """Load Keras model with compatibility fixes for different versions"""
     if not TF_AVAILABLE:
-        raise RuntimeError(
-            "TensorFlow is required but not installed. "
-            "Please try again - it will be installed on next run."
-        )
+        raise RuntimeError("TensorFlow is required but not installed")
     
-    # ... rest of your function code ...
-# Suppress yfinance logs
-yf_logger = logging.getLogger('yfinance')
-yf_logger.setLevel(logging.CRITICAL)
-# Lazy import TensorFlow - load only when function is called
-tf = None
-
-def get_tf():
-    global tf
-    if tf is None:
-        import tensorflow
-        tf = tensorflow
-    return tf
+    try:
+        # Try standard loading first
+        model = load_model(str(model_path))
+        print(f"✅ Model loaded successfully from {model_path}")
+        return model
+    except Exception as e:
+        print(f"⚠️  Standard load failed, trying compatibility mode...")
+        
+        # Compatibility mode with custom objects
+        from tensorflow.keras.initializers import GlorotUniform, Orthogonal, Zeros, Ones
+        from tensorflow.keras.regularizers import L2
+        from tensorflow.keras.layers import LSTM, Dense, Dropout, BatchNormalization, InputLayer
+        
+        custom_objects = {
+            'GlorotUniform': GlorotUniform,
+            'Orthogonal': Orthogonal,
+            'Zeros': Zeros,
+            'Ones': Ones,
+            'L2': L2,
+            'LSTM': LSTM,
+            'Dense': Dense,
+            'Dropout': Dropout,
+            'BatchNormalization': BatchNormalization,
+            'InputLayer': InputLayer,
+        }
+        
+        try:
+            model = load_model(
+                str(model_path),
+                custom_objects=custom_objects,
+                safe_mode=False
+            )
+            print(f"✅ Model loaded with custom objects")
+            return model
+        except Exception as e2:
+            raise RuntimeError(f"Failed to load model: {str(e2)}")
 # ============================================================================
 # REAL-TIME PRICE FETCHER
 # ============================================================================
@@ -1138,7 +1157,7 @@ def predict_stock_enhanced(symbol: str):
     
     # Load model
     tf = get_tf()
-    model = tf.keras.models.load_model(str(model_path))
+    model = load_model_safe(model_path)
     
     # Load and prepare data (with real-time price update)
     df, feature_cols = load_and_prepare_data(symbol)
