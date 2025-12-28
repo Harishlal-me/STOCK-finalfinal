@@ -1,35 +1,43 @@
 # =========================
-# Machine Learning (Lightweight)
+# Core ML & Data Science
 # =========================
-numpy>=1.24.3
+numpy>=1.24.3,<2.0.0
 pandas>=2.0.0
 scikit-learn>=1.3.0
 joblib>=1.3.0
+
 # =========================
-# Finance & Utilities
+# Deep Learning (for prediction)
 # =========================
-yfinance>=0.2.0
-python-dateutil>=2.8.0
-rich>=13.0.0
+tensorflow>=2.13.0,<3.0.0
+protobuf>=3.20.0,<4.0.0
+
 # =========================
-# Streamlit UI
+# Finance & Data
 # =========================
-streamlit>=1.28.0
-plotly>=5.0.0
+yfinance>=0.2.32
+python-dateutil>=2.8.2
+
+# =========================
+# Streamlit & UI
+# =========================
+streamlit>=1.28.0,<2.0.0
+plotly>=5.14.0
 markdown-it-py>=3.0.0
 mdurl>=0.1.2
-tensorflow>=2.13.0
-streamlit>=1.28.0
 pygments>=2.15.0
+rich>=13.0.0
+
 # =========================
-# API
+# Web Framework (optional - if using API)
 # =========================
 fastapi>=0.100.0
 uvicorn>=0.23.0
 pydantic>=2.0.0
 gunicorn>=21.0.0
+
 # =========================
-# Compatibility
+# Utilities
 # =========================
-protobuf<5
 setuptools>=65.0.0
+requests>=2.31.0
