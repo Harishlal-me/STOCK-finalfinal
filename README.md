@@ -64,7 +64,7 @@ This model is in **ALPHA/TESTING** phase:
 
 | Metric | Value | Status |
 |--------|-------|--------|
-| **Prediction Accuracy** | 60-70% | ✅ Above Random |
+| **Prediction Accuracy** | 58-60% | ✅ Above Random |
 | **Price Correlation (R²)** | 0.996 | ✅ Excellent |
 | **Mean Error** | ~1% | ✅ Low Error |
 | **Risk:Reward Ratio** | 1.5-2.5:1 | ✅ Favorable |
