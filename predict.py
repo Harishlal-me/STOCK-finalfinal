@@ -29,7 +29,6 @@ import logging
 logging.getLogger('tensorflow').setLevel(logging.ERROR)
 logging.getLogger('keras').setLevel(logging.ERROR)
 
-import tensorflow as tf
 from pathlib import Path
 from dataclasses import dataclass
 from typing import List, Dict
@@ -39,7 +38,15 @@ import csv
 # Suppress yfinance logs
 yf_logger = logging.getLogger('yfinance')
 yf_logger.setLevel(logging.CRITICAL)
+# Lazy import TensorFlow - load only when function is called
+tf = None
 
+def get_tf():
+    global tf
+    if tf is None:
+        import tensorflow
+        tf = tensorflow
+    return tf
 # ============================================================================
 # REAL-TIME PRICE FETCHER
 # ============================================================================
@@ -1097,6 +1104,7 @@ def predict_stock_enhanced(symbol: str):
         raise FileNotFoundError("Model not found. Run: python train_fixed.py")
     
     # Load model
+    tf = get_tf()
     model = tf.keras.models.load_model(str(model_path))
     
     # Load and prepare data (with real-time price update)
