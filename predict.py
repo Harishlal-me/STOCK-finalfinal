@@ -7,100 +7,40 @@ Enhanced Stock Predictor v2 - Advanced Risk Management & Analysis
 ✅ Better market regime detection
 ✅ Comparative table format for multiple stocks
 ✅ Weighted confidence scoring
+
+PART 1/5: Environment Setup, Imports, and Real-Time Price Fetcher
 """
 
-# =================================================================
-# ENVIRONMENT SETUP
-# =================================================================
 import os
 os.environ['TF_CPP_MIN_LOG_LEVEL'] = '3'
 os.environ['TF_ENABLE_ONEDNN_OPTS'] = '0'
 os.environ['TF_SUPPRESS_LOGS'] = '1'
-os.environ['TF_USE_LEGACY_KERAS'] = '1'
 
 import warnings
 warnings.filterwarnings('ignore')
 
-# =================================================================
-# CORE IMPORTS
-# =================================================================
 import sys
 import numpy as np
 import pandas as pd
 from datetime import datetime, timedelta
 import time
+
 import logging
-import csv
+logging.getLogger('tensorflow').setLevel(logging.ERROR)
+logging.getLogger('keras').setLevel(logging.ERROR)
+
+import tensorflow as tf
 from pathlib import Path
 from dataclasses import dataclass
 from typing import List, Dict
-import yfinance as yf
-from sklearn.preprocessing import RobustScaler
+import argparse
+import csv
 
-# =================================================================
-# LOGGING SETUP
-# =================================================================
-logging.getLogger('tensorflow').setLevel(logging.ERROR)
-logging.getLogger('keras').setLevel(logging.ERROR)
-logging.getLogger('yfinance').setLevel(logging.CRITICAL)
+# Suppress yfinance logs
+yf_logger = logging.getLogger('yfinance')
+yf_logger.setLevel(logging.CRITICAL)
 
-# =================================================================
-# TENSORFLOW IMPORT (WITH ERROR HANDLING)
-# =================================================================
-TF_AVAILABLE = False
-try:
-    import tensorflow as tf
-    from tensorflow.keras.models import load_model
-    TF_AVAILABLE = True
-    print("✅ TensorFlow loaded successfully")
-except ImportError as e:
-    TF_AVAILABLE = False
-    print(f"⚠️  Warning: TensorFlow not available - {str(e)}")
 
-# =================================================================
-# HELPER FUNCTION FOR SAFE MODEL LOADING
-# =================================================================
-def load_model_safe(model_path):
-    """Load Keras model with compatibility fixes for different versions"""
-    if not TF_AVAILABLE:
-        raise RuntimeError("TensorFlow is required but not installed")
-    
-    try:
-        # Try standard loading first
-        model = load_model(str(model_path))
-        print(f"✅ Model loaded successfully from {model_path}")
-        return model
-    except Exception as e:
-        print(f"⚠️  Standard load failed, trying compatibility mode...")
-        
-        # Compatibility mode with custom objects
-        from tensorflow.keras.initializers import GlorotUniform, Orthogonal, Zeros, Ones
-        from tensorflow.keras.regularizers import L2
-        from tensorflow.keras.layers import LSTM, Dense, Dropout, BatchNormalization, InputLayer
-        
-        custom_objects = {
-            'GlorotUniform': GlorotUniform,
-            'Orthogonal': Orthogonal,
-            'Zeros': Zeros,
-            'Ones': Ones,
-            'L2': L2,
-            'LSTM': LSTM,
-            'Dense': Dense,
-            'Dropout': Dropout,
-            'BatchNormalization': BatchNormalization,
-            'InputLayer': InputLayer,
-        }
-        
-        try:
-            model = load_model(
-                str(model_path),
-                custom_objects=custom_objects,
-                safe_mode=False
-            )
-            print(f"✅ Model loaded with custom objects")
-            return model
-        except Exception as e2:
-            raise RuntimeError(f"Failed to load model: {str(e2)}")
 # ============================================================================
 # REAL-TIME PRICE FETCHER
 # ============================================================================
@@ -111,47 +51,37 @@ class RealTimePriceFetcher:
     def get_current_price(symbol: str) -> Dict:
         """
         Fetch real-time price data from yfinance
-        Intelligently handles market hours and weekend/holidays
+        Returns: dict with current_price, price_date, high, low, volume
         """
-        
         try:
             import yfinance as yf
-            from datetime import datetime, time as dt_time
-        
+            
             ticker = yf.Ticker(symbol)
-            now = datetime.now()
-        
-        # Define market close time (4:00 PM ET = 16:00)
-        # Adjust if you're in a different timezone
-            market_close = dt_time(16, 0)
-            current_time = now.time()
-        
-        # If it's a weekend, get Friday's data
-            if now.weekday() >= 5:  # Saturday = 5, Sunday = 6
-                hist = ticker.history(period="5d")
-        # If before market close + 2 hours (6 PM), use yesterday
-            elif current_time < dt_time(18, 0):
-                hist = ticker.history(period="5d")
-        # After 6 PM, try to get today's closing price
-            else:
-                hist = ticker.history(period="2d")
-        
+            
+            # Try multiple methods to get current price
+            # Method 1: Try last 10 days (handles weekends/holidays)
+            hist = ticker.history(period="10d")
+            
             if hist.empty:
-                raise ValueError(f"No price data available")
-        
-        # Get the most recent trading day
+                # Method 2: Try info (real-time price)
+                info = ticker.info
+                if 'currentPrice' in info and info['currentPrice']:
+                    return {
+                        'current_price': float(info['currentPrice']),
+                        'price_date': datetime.now().strftime('%Y-%m-%d'),
+                        'high': float(info.get('dayHigh', info['currentPrice'])),
+                        'low': float(info.get('dayLow', info['currentPrice'])),
+                        'open': float(info.get('open', info['currentPrice'])),
+                        'volume': float(info.get('volume', 0)),
+                        'datetime': datetime.now()
+                    }
+                else:
+                    raise ValueError(f"No price data available")
+            
+            # Get the most recent trading day
             latest_data = hist.iloc[-1]
             latest_date = hist.index[-1]
-        
-        # Check if today's data is available (after market close)
-            today = now.date()
-            if latest_date.date() == today and current_time >= dt_time(18, 0):
-            # Use today's closing price (after 6 PM)
-                print(f" [Using TODAY's close]", end="")
-            else:
-            # Use most recent available (likely yesterday)
-                print(f" [Using {latest_date.strftime('%Y-%m-%d')} close]", end="")
-        
+            
             return {
                 'current_price': float(latest_data['Close']),
                 'price_date': latest_date.strftime('%Y-%m-%d'),
@@ -159,34 +89,30 @@ class RealTimePriceFetcher:
                 'low': float(latest_data['Low']),
                 'open': float(latest_data['Open']),
                 'volume': float(latest_data['Volume']),
-                    'datetime': latest_date
-        }
-        
+                'datetime': latest_date
+            }
+            
         except Exception as e:
             raise ValueError(f"Could not fetch current price for {symbol}: {str(e)}")
     
     @staticmethod
     def update_df_with_current_price(df: pd.DataFrame, symbol: str) -> pd.DataFrame:
-        """Update DataFrame with real-time price data, with retries"""
+        """
+        Update dataframe with most recent price from yfinance
+        """
         max_retries = 3
         retry_delay = 2
-    
+        
         for attempt in range(max_retries):
             try:
                 current_data = RealTimePriceFetcher.get_current_price(symbol)
-            
-            # Get dates for comparison
+                
+                # Check if we need to add a new row or update existing
                 latest_df_date = df.index[-1]
                 current_date = current_data['datetime']
-            
-            # Remove timezone for comparison if needed
-                if hasattr(current_date, 'tz') and current_date.tz is not None:
-                    current_date = current_date.tz_localize(None)
-                if hasattr(latest_df_date, 'tz') and latest_df_date.tz is not None:
-                    latest_df_date = latest_df_date.tz_localize(None)
-            
-            # If yfinance data is newer than CSV, append new row
-                if current_date.date() > latest_df_date.date():
+                
+                # If current date is newer than df's latest date, append new row
+                if current_date > latest_df_date:
                     new_row = pd.DataFrame({
                         'open': [current_data['open']],
                         'high': [current_data['high']],
@@ -194,34 +120,28 @@ class RealTimePriceFetcher:
                         'close': [current_data['current_price']],
                         'volume': [current_data['volume']]
                     }, index=[current_date])
-                
+                    
                     df = pd.concat([df, new_row])
-                    print(f" [✅ Added {current_date.strftime('%Y-%m-%d')}: ${current_data['current_price']:.2f}]", end="")
-            
-            # If same date, update the last row with latest data
+                    print(f" [✅ Live Price: ${current_data['current_price']:.2f}]", end="")
+                
+                # If same date, update the last row
                 elif current_date.date() == latest_df_date.date():
                     df.loc[df.index[-1], 'close'] = current_data['current_price']
                     df.loc[df.index[-1], 'high'] = max(df.loc[df.index[-1], 'high'], current_data['high'])
                     df.loc[df.index[-1], 'low'] = min(df.loc[df.index[-1], 'low'], current_data['low'])
                     df.loc[df.index[-1], 'volume'] = current_data['volume']
-                    print(f" [✅ Updated {current_date.strftime('%Y-%m-%d')}: ${current_data['current_price']:.2f}]", end="")
-            
-            # If yfinance data is older, CSV is more current (unusual)
-                else:
-                    print(f" [⚠️ CSV newer than yfinance, using CSV: ${df['close'].iloc[-1]:.2f}]", end="")
-            
+                    print(f" [✅ Live Price: ${current_data['current_price']:.2f}]", end="")
+                
                 return df
-            
+                
             except Exception as e:
                 if attempt < max_retries - 1:
-                    print(f" [Retry {attempt+1}]", end="")
                     time.sleep(retry_delay)
                     continue
                 else:
-                # Use CSV data if all retries fail
-                    print(f" [⚠️ Using CSV data: ${df['close'].iloc[-1]:.2f}]", end="")
+                    # Silently use CSV data without showing error
                     return df
-    
+        
         return df
 
 
@@ -232,70 +152,78 @@ class AdaptiveThresholds:
     """Per-stock adaptive thresholds based on historical behavior"""
     
     @staticmethod
-    def calculate_stock_threshold(df: pd.DataFrame, volatility: float, market_regime: str) -> dict:
+    def calculate_stock_threshold(df: pd.DataFrame, volatility: float, market_regime: str, 
+                              historical_accuracy: float = None) -> dict:
         """
         Calculate adaptive threshold per stock based on:
         - Stock's historical volatility pattern
         - Market regime
         - Trend consistency
+        - Historical accuracy (NEW)
         """
         base_threshold = 0.55
-        
-        # Historical volatility pattern (last 60 days)
+    
+        # NEW: If we know this stock performs poorly, increase threshold drastically
+        if historical_accuracy is not None and historical_accuracy < 0.56:
+            # For 52-53% accuracy stocks, threshold should be MUCH higher
+            base_threshold = 0.70  # Only trade when model is VERY confident
+            print(f"   ⚠️ Low historical accuracy ({historical_accuracy:.1%}) - Using high threshold: {base_threshold:.1%}")
+    
+    # Historical volatility pattern (last 60 days)
         if len(df) >= 60:
             recent_vol = df['close'].pct_change().iloc[-60:].std()
             long_vol = df['close'].pct_change().std()
             vol_ratio = recent_vol / long_vol if long_vol > 0 else 1.0
-            
+        
             # If recent volatility much higher than normal, be more conservative
             if vol_ratio > 1.5:
-                vol_adj = 0.05
+                vol_adj = 0.08  # Increased from 0.05
             elif vol_ratio > 1.2:
-                vol_adj = 0.03
+                vol_adj = 0.05  # Increased from 0.03
             elif vol_ratio < 0.8:
                 vol_adj = -0.02
             else:
-                vol_adj = 0.01
+                vol_adj = 0.02
         else:
             # Fallback to absolute volatility
             if volatility > 0.04:
-                vol_adj = 0.06
+                vol_adj = 0.10  # Increased from 0.06
             elif volatility > 0.03:
-                vol_adj = 0.04
+                vol_adj = 0.06  # Increased from 0.04
             elif volatility > 0.02:
-                vol_adj = 0.02
+                vol_adj = 0.03  # Increased from 0.02
             else:
                 vol_adj = 0.00
-        
-        # Trend consistency (helps differentiate MIXED from real trends)
+    
+    # Trend consistency (helps differentiate MIXED from real trends)
         if len(df) >= 20:
             closes = df['close'].iloc[-20:]
             returns = closes.pct_change().dropna()
-            
-            # Count directional consistency
+        
+        # Count directional consistency
             positive_days = (returns > 0).sum()
             trend_consistency = abs(positive_days - 10) / 10
-            
-            if trend_consistency > 0.6:
-                regime_adj = -0.02
-            elif trend_consistency < 0.3:
-                regime_adj = 0.04
-            else:
-                regime_adj = 0.01
-        else:
-            regime_adj = 0.01
         
-        # Market regime fine-tuning
+            if trend_consistency > 0.6:
+                regime_adj = -0.01  # Less aggressive
+            elif trend_consistency < 0.3:
+                regime_adj = 0.06  # More conservative (was 0.04)
+            else:
+                regime_adj = 0.03  # Increased from 0.01
+        else:
+            regime_adj = 0.02
+    
+    # Market regime fine-tuning
         if "BULL STRONG" in market_regime:
             regime_adj -= 0.01
         elif "BEAR STRONG" in market_regime:
-            regime_adj += 0.02
+            regime_adj += 0.03  # Increased from 0.02
         elif "MIXED" in market_regime or "SIDEWAYS" in market_regime:
-            regime_adj += 0.03
-        
+            regime_adj += 0.05  # Much more conservative (was 0.03)
+    
         adjusted_threshold = base_threshold + vol_adj + regime_adj
-        adjusted_threshold = max(0.50, min(0.72, adjusted_threshold))
-        
+        adjusted_threshold = max(0.55, min(0.80, adjusted_threshold))  # Changed max from 0.72 to 0.80
+    
         return {
             'threshold': adjusted_threshold,
             'vol_adjustment': vol_adj,
@@ -329,6 +257,62 @@ class AdaptiveThresholds:
             label = "🔴 VERY LOW"
         
         return label, score
+    
+# ============================================================================
+# STOCK PERFORMANCE TRACKER (NEW)
+# ============================================================================
+class StockPerformanceTracker:
+    """Track historical accuracy per stock"""
+    
+    def __init__(self, log_file: str = "stock_performance.csv"):
+        self.log_file = Path(log_file)
+        self.performance = self._load_performance()
+    
+    def _load_performance(self) -> dict:
+        """Load historical performance data"""
+        if not self.log_file.exists():
+            return {}
+        
+        try:
+            df = pd.read_csv(self.log_file)
+            # Calculate accuracy per stock
+            performance = {}
+            for symbol in df['symbol'].unique():
+                stock_df = df[df['symbol'] == symbol]
+                if len(stock_df) >= 5:  # Need at least 5 predictions
+                    # Calculate accuracy from past predictions
+                    # This assumes you have an 'outcome' column tracking if prediction was correct
+                    if 'outcome' in stock_df.columns:
+                        accuracy = stock_df['outcome'].mean()
+                        performance[symbol] = accuracy
+            return performance
+        except:
+            return {}
+    
+    def get_stock_accuracy(self, symbol: str) -> float:
+        """Get historical accuracy for a stock"""
+        return self.performance.get(symbol, None)
+    
+    def update_performance(self, symbol: str, was_correct: bool):
+        """
+        Update performance after verifying prediction
+        This would be called when you verify predictions (e.g., 5 days later)
+        """
+        if not self.log_file.exists():
+            with open(self.log_file, 'w', newline='') as f:
+                writer = csv.writer(f)
+                writer.writerow(['timestamp', 'symbol', 'outcome'])
+        
+        with open(self.log_file, 'a', newline='') as f:
+            writer = csv.writer(f)
+            writer.writerow([
+                datetime.now().strftime('%Y-%m-%d %H:%M:%S'),
+                symbol,
+                1 if was_correct else 0
+            ])
+        
+        # Reload performance
+        self.performance = self._load_performance()
 # ============================================================================
 # END OF PART 1/5
 # ============================================================================
@@ -530,11 +514,14 @@ class ImprovedRiskManagement:
 # ============================================================================
 # WEIGHTED DECISION SCORING WITH RISK ASSESSMENT
 # ============================================================================
+# ============================================================================
+# WEIGHTED DECISION SCORING WITH RISK ASSESSMENT
+# ============================================================================
 class WeightedDecisionEngine:
     """Score-based decision making with enhanced risk evaluation"""
     
     @staticmethod
-    def calculate_signal_score(pred_data: dict) -> dict:
+    def calculate_signal_score(pred_data, historical_accuracy=None):
         """
         Calculate weighted score (0-100) for trade decision
         Factors:
@@ -542,10 +529,18 @@ class WeightedDecisionEngine:
         - Risk-reward: 25%
         - Market alignment: 20%
         - Volatility: 15%
+        - Historical accuracy penalty (NEW)
         """
         score = 0
         breakdown = {}
         risk_level = "MODERATE"
+        
+        # NEW: Apply accuracy penalty for historically poor-performing stocks
+        accuracy_penalty = 0
+        if historical_accuracy is not None and historical_accuracy < 0.56:
+            # Penalize score for historically poor-performing stocks
+            accuracy_penalty = (0.56 - historical_accuracy) * 200  # Up to -20 points for 52% accuracy
+            risk_level = "VERY HIGH"
         
         # 1. Probability margin (40 points)
         prob_margin = pred_data['week_prob_up'] - pred_data['threshold']
@@ -621,8 +616,19 @@ class WeightedDecisionEngine:
         score += vol_score
         breakdown['volatility'] = vol_score
         
-        # Enhanced decision logic with risk consideration
-        if score >= 75 and risk_level in ["LOW", "MODERATE"]:
+        # NEW: Apply accuracy penalty at the end
+        score = max(0, score - accuracy_penalty)
+        if accuracy_penalty > 0:
+            breakdown['accuracy_penalty'] = -accuracy_penalty
+        
+        # Enhanced decision logic with accuracy override
+        recommendation = ""
+        if historical_accuracy is not None and historical_accuracy < 0.56:
+            # Override for poor-performing stocks - reject regardless of score
+            action = "❌ AVOID - POOR HISTORICAL ACCURACY"
+            signal = "REJECTED"
+            recommendation = f"This stock has only {historical_accuracy:.1%} historical accuracy - model is not reliable here"
+        elif score >= 75 and risk_level in ["LOW", "MODERATE"]:
             action = "🟢 STRONG BUY" if "UP" in direction else "🔴 STRONG SELL"
             signal = "EXCELLENT"
             recommendation = "High confidence trade with favorable conditions"
@@ -875,243 +881,120 @@ class EnhancedStockPrediction:
 # ============================================================================
 # DATA LOADING WITH REAL-TIME PRICE UPDATE
 # ============================================================================
-def update_csv_with_latest_data(symbol: str, csv_path: Path) -> pd.DataFrame:
-    """
-    Auto-update CSV with latest prices from yfinance
-    """
-    try:
-        # Load existing CSV
-        df = pd.read_csv(csv_path)
-        
-        # Standardize columns
-        df.columns = df.columns.str.lower()
-        
-        # Find date column
-        date_col = None
-        for col in ['date', 'datetime', 'timestamp', 'price']:
-            if col in df.columns:
-                date_col = col
-                break
-        
-        if date_col is None:
-            date_col = df.columns[0]
-        
-        # Parse dates
-        df[date_col] = pd.to_datetime(df[date_col], errors='coerce')
-        df = df.dropna(subset=[date_col])
-        df = df.sort_values(date_col)
-        
-        # Get last date in CSV
-        last_csv_date = df[date_col].max()
-        today = pd.Timestamp.now().normalize()
-        
-        # Check if update needed
-        days_old = (today - last_csv_date).days
-        
-        if days_old <= 1:
-            print(f" [CSV up-to-date: {last_csv_date.strftime('%Y-%m-%d')}]", end="", flush=True)
-            # Set date as index and return
-            df = df.set_index(date_col)
-            if df.index.tz is not None:
-                df.index = df.index.tz_localize(None)
-            return df
-        
-        # Need to update - fetch new data
-        print(f" [CSV {days_old}d old, updating...]", end="", flush=True)
-        
-        import yfinance as yf
-        import requests
-        
-        session = requests.Session()
-        session.headers.update({
-            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'
-        })
-        
-        ticker = yf.Ticker(symbol, session=session)
-        
-        # Fetch data from last CSV date to today
-        start_date = last_csv_date + timedelta(days=1)
-        
-        with warnings.catch_warnings():
-            warnings.simplefilter("ignore")
-            new_data = ticker.history(start=start_date, interval='1d')
-        
-        if new_data.empty:
-            # No new data (market closed)
-            print(f" [No new data available]", end="", flush=True)
-            df = df.set_index(date_col)
-            if df.index.tz is not None:
-                df.index = df.index.tz_localize(None)
-            return df
-        
-        # Process new data
-        new_data = new_data.reset_index()
-        new_data.columns = new_data.columns.str.lower()
-        
-        if isinstance(new_data.columns, pd.MultiIndex):
-            new_data.columns = new_data.columns.get_level_values(0)
-        
-        # Rename columns to match CSV format
-        rename_map = {}
-        for col in new_data.columns:
-            if 'date' in col.lower() or col.lower() == 'index':
-                rename_map[col] = date_col
-            elif col.lower() in ['open', 'high', 'low', 'close', 'volume']:
-                rename_map[col] = col.lower()
-        
-        new_data = new_data.rename(columns=rename_map)
-        
-        # Ensure date column is properly formatted
-        new_data[date_col] = pd.to_datetime(new_data[date_col])
-        
-        # Remove timezone
-        if hasattr(new_data[date_col].dtype, 'tz') and new_data[date_col].dtype.tz is not None:
-            new_data[date_col] = new_data[date_col].dt.tz_localize(None)
-        
-        # Keep only columns that exist in original CSV
-        cols_to_keep = [col for col in df.columns if col in new_data.columns]
-        new_data = new_data[cols_to_keep]
-        
-        # Combine old and new data
-        combined = pd.concat([df, new_data], ignore_index=True)
-        combined = combined.drop_duplicates(subset=[date_col], keep='last')
-        combined = combined.sort_values(date_col)
-        
-        # Save updated CSV
-        combined.to_csv(csv_path, index=False)
-        
-        latest = combined[date_col].max()
-        new_rows = len(combined) - len(df)
-        print(f" [+{new_rows} rows, saved to {latest.strftime('%Y-%m-%d')}]", end="", flush=True)
-        
-        # Set date as index for return
-        combined = combined.set_index(date_col)
-        if combined.index.tz is not None:
-            combined.index = combined.index.tz_localize(None)
-        
-        return combined
-        
-    except Exception as e:
-        # If update fails, return original CSV data
-        print(f" [Update failed, using CSV: {str(e)[:30]}]", end="", flush=True)
-        df = df.set_index(date_col)
-        if df.index.tz is not None:
-            df.index = df.index.tz_localize(None)
-        return df
-
-
 def load_and_prepare_data(symbol: str):
     """
-    Load data from CSV and auto-update with latest prices
+    Load historical data from CSV and update with real-time price from yfinance
     """
-    # Try to find CSV file
     csv_paths = [
-        Path(f"data/{symbol}.csv"),
         Path(f"data/stock_data/{symbol}.csv"),
+        Path(f"data/{symbol}.csv"),
         Path(f"stock_data/{symbol}.csv"),
         Path(f"{symbol}.csv"),
+        Path(f"data/stock_data/{symbol}_daily.csv"),
     ]
     
     df = None
     csv_found = None
     
-    # Find CSV
+    # Try to load from CSV
     for csv_path in csv_paths:
         if csv_path.exists():
-            csv_found = csv_path
-            print(f" [Found: {csv_path}]", end="", flush=True)
-            break
+            try:
+                df = pd.read_csv(csv_path)
+                csv_found = csv_path
+                print(f" [Loading from: {csv_path}]", end="")
+                break
+            except:
+                continue
     
-    # If no CSV found, try to download from yfinance
-    if csv_found is None:
-        print(f" [No CSV, downloading from yfinance]", end="", flush=True)
-        
-        import yfinance as yf
-        import requests
-        
+    # If no CSV found, fetch from yfinance
+    if df is None:
+        print(f" [Fetching from yfinance]", end="")
         try:
-            session = requests.Session()
-            session.headers.update({
-                'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'
-            })
-            
-            ticker = yf.Ticker(symbol, session=session)
+            import yfinance as yf
+            end_date = datetime.now()
+            start_date = end_date - timedelta(days=730)  # 2 years
             
             with warnings.catch_warnings():
                 warnings.simplefilter("ignore")
-                df = ticker.history(period='2y', interval='1d')
+                df = yf.download(symbol, start=start_date, end=end_date, 
+                               progress=False, timeout=15, show_errors=False)
             
             if df.empty:
-                raise ValueError(f"No data from yfinance")
-            
-            # Save to CSV for future use
-            df_to_save = df.reset_index()
-            df_to_save.columns = df_to_save.columns.str.lower()
-            save_path = Path(f"data/{symbol}.csv")
-            save_path.parent.mkdir(exist_ok=True)
-            df_to_save.to_csv(save_path, index=False)
-            
-            print(f" [Downloaded & saved to {save_path}]", end="", flush=True)
-            
+                raise ValueError(f"Could not fetch data for {symbol}")
+                
         except Exception as e:
-            raise ValueError(
-                f"Cannot load {symbol}:\n"
-                f"   - No CSV found\n"
-                f"   - yfinance failed: {str(e)}\n"
-                f"   Download manually from Yahoo Finance"
-            )
-    else:
-        # Update CSV with latest data
-        df = update_csv_with_latest_data(symbol, csv_found)
+            raise ValueError(f"Could not load data for {symbol}: {str(e)}")
     
-    if df is None or df.empty:
-        raise ValueError(f"No data for {symbol}")
+    if df.empty:
+        raise ValueError(f"No data available for {symbol}")
     
-    # Standardize columns
+    # Standardize column names
     df.columns = df.columns.str.lower()
     
-    # Handle multi-level columns
-    if isinstance(df.columns, pd.MultiIndex):
-        df.columns = df.columns.get_level_values(0)
+    # Handle date index
+    date_columns = ['date', 'datetime', 'timestamp', 'time']
+    date_col = None
     
-    # Ensure datetime index
-    if not isinstance(df.index, pd.DatetimeIndex):
-        df.index = pd.to_datetime(df.index)
+    for col in date_columns:
+        if col in df.columns:
+            date_col = col
+            break
     
-    # Remove timezone
+    if date_col is None and len(df.columns) > 0:
+        first_col = df.columns[0]
+        if df[first_col].astype(str).str.match(r'^\d{4}-\d{2}-\d{2}').any():
+            date_col = first_col
+    
+    if date_col:
+        df[date_col] = pd.to_datetime(df[date_col], errors='coerce')
+        df = df.dropna(subset=[date_col])
+        df.set_index(date_col, inplace=True)
+    elif not isinstance(df.index, pd.DatetimeIndex):
+        try:
+            df.index = pd.to_datetime(df.index, errors='coerce')
+            df = df[df.index.notna()]
+        except:
+            raise ValueError(f"Could not parse dates for {symbol}")
+    
+    # Remove timezone if present
     if df.index.tz is not None:
         df.index = df.index.tz_localize(None)
     
-    # Sort and clean
+    # Sort and remove duplicates
     df = df.sort_index()
     df = df[~df.index.duplicated(keep='last')]
     
-    # Get info
-    latest_date = df.index[-1]
-    current_price = float(df['close'].iloc[-1])
+    # **NEW: Update with real-time price from yfinance**
+    df = RealTimePriceFetcher.update_df_with_current_price(df, symbol)
     
-    print(f" [✅ {len(df)} rows, {latest_date.strftime('%Y-%m-%d')}, ${current_price:.2f}]", end="")
+    if len(df) > 0:
+        print(f" [{len(df)} rows, latest: {df.index[-1].strftime('%Y-%m-%d')}]", end="")
+    else:
+        raise ValueError(f"No valid data found for {symbol}")
     
-    # Validate columns
+    # Validate required columns
     required_cols = ['open', 'high', 'low', 'close', 'volume']
-    missing = [col for col in required_cols if col not in df.columns]
-    if missing:
-        raise ValueError(f"Missing columns: {missing}")
+    missing_cols = [col for col in required_cols if col not in df.columns]
+    if missing_cols:
+        raise ValueError(f"Missing required columns: {missing_cols}")
     
     # Convert to numeric
-    for col in required_cols:
-        df[col] = pd.to_numeric(df[col], errors='coerce')
+    numeric_cols = ['open', 'high', 'low', 'close', 'volume']
+    for col in numeric_cols:
+        if col in df.columns:
+            df[col] = pd.to_numeric(df[col], errors='coerce')
     
-    # Drop NaN
+    # Drop rows with NaN in required columns
     df = df.dropna(subset=required_cols)
     
-    if len(df) < 100:
-        raise ValueError(f"Insufficient data: {len(df)} rows (need 100+)")
+    if len(df) == 0:
+        raise ValueError(f"No valid numeric data found for {symbol}")
     
-    # Create features
+    # Create prediction features
     df = create_prediction_features(df)
     
-    # Feature list
+    # Feature columns used by model
     feature_cols = [
         'atr_pct', 'volatility', 'trend_strength', 'roc_10', 'volume_ratio',
         'sma_7', 'ema_7', 'rsi_14', 'volume_trend_week',
@@ -1120,6 +1003,9 @@ def load_and_prepare_data(symbol: str):
     ]
     
     return df, feature_cols
+
+
+# ============================================================================
 # END OF PART 3/5
 # ============================================================================
 # Next: Part 4 will include:
@@ -1135,9 +1021,9 @@ Prediction Engine, CSV Logging, and Display Functions
 # ============================================================================
 # ENHANCED PREDICTION ENGINE
 # ============================================================================
-def predict_stock_enhanced(symbol: str):
+def predict_stock_enhanced(symbol: str, performance_tracker: StockPerformanceTracker = None):
     """
-    Enhanced prediction with all improvements
+    Enhanced prediction with all improvements + stock-specific calibration
     """
     symbol = symbol.upper()
     
@@ -1158,8 +1044,8 @@ def predict_stock_enhanced(symbol: str):
         raise FileNotFoundError("Model not found. Run: python train_fixed.py")
     
     # Load model
-    model = load_model_safe(model_path)
-    
+    model = tf.keras.models.load_model(str(model_path), compile=False)
+
     # Load and prepare data (with real-time price update)
     df, feature_cols = load_and_prepare_data(symbol)
     
@@ -1175,9 +1061,16 @@ def predict_stock_enhanced(symbol: str):
     trend_strength = regime_analysis['trend_strength']
     volatility_regime = regime_analysis['volatility_regime']
     
-    # Adaptive threshold per stock
+    # NEW: Get historical accuracy for this stock
+    historical_accuracy = None
+    if performance_tracker:
+        historical_accuracy = performance_tracker.get_stock_accuracy(symbol)
+        if historical_accuracy:
+            print(f" [Hist: {historical_accuracy:.1%}]", end="")
+    
+    # Adaptive threshold per stock WITH historical accuracy
     threshold_info = AdaptiveThresholds.calculate_stock_threshold(
-        df, current_volatility, market_regime
+        df, current_volatility, market_regime, historical_accuracy  # Added parameter
     )
     adaptive_threshold = threshold_info['threshold']
     
@@ -1219,7 +1112,7 @@ def predict_stock_enhanced(symbol: str):
         current_price, current_atr, current_volatility, week_prob_up, trend_strength
     )
     
-    # Weighted decision scoring
+    # Weighted decision scoring WITH historical accuracy
     pred_data = {
         'week_prob_up': week_prob_up,
         'threshold': adaptive_threshold,
@@ -1228,11 +1121,16 @@ def predict_stock_enhanced(symbol: str):
         'week_direction': week_direction,
         'volatility': current_volatility
     }
-    decision = WeightedDecisionEngine.calculate_signal_score(pred_data)
+    decision = WeightedDecisionEngine.calculate_signal_score(pred_data, historical_accuracy)  # Added parameter
     
     # Generate reasoning and warnings
     reasoning = []
-    warnings_list = []
+    warnings = []
+    
+    # NEW: Add historical accuracy warning
+    if historical_accuracy is not None and historical_accuracy < 0.56:
+        warnings.append(f"⚠️ CRITICAL: Historical accuracy only {historical_accuracy:.1%}")
+        reasoning.append(f"❌ Poor historical performance ({historical_accuracy:.1%} accuracy)")
     
     prob_margin = week_prob_up - adaptive_threshold
     
@@ -1251,26 +1149,26 @@ def predict_stock_enhanced(symbol: str):
         reasoning.append(f"✅ Good R:R ({risk_mgmt['risk_reward']:.2f}:1)")
     else:
         reasoning.append(f"⚠️ Poor R:R ({risk_mgmt['risk_reward']:.2f}:1)")
-        warnings_list.append(f"Risk-reward at {risk_mgmt['risk_reward']:.2f}:1")
+        warnings.append(f"Risk-reward at {risk_mgmt['risk_reward']:.2f}:1")
     
     # Market alignment
     if ("BULL" in market_regime and week_direction == "UP") or ("BEAR" in market_regime and week_direction == "DOWN"):
         reasoning.append(f"✅ Aligned with {market_regime}")
     elif "CHOPPY" in market_regime:
-        warnings_list.append("Choppy market - high risk")
+        warnings.append("Choppy market - high risk")
         reasoning.append(f"⚠️ Choppy market detected")
     elif "MIXED" in market_regime or "SIDEWAYS" in market_regime:
-        warnings_list.append("Market lacks clear direction")
+        warnings.append("Market lacks clear direction")
         reasoning.append(f"⚠️ {market_regime}")
     else:
-        warnings_list.append("Signal conflicts with market regime")
+        warnings.append("Signal conflicts with market regime")
         reasoning.append(f"⚠️ Signal vs regime mismatch")
     
     # Volatility check
     if current_volatility > 0.04:
-        warnings_list.append(f"Very high volatility ({current_volatility*100:.1f}%)")
+        warnings.append(f"Very high volatility ({current_volatility*100:.1f}%)")
     elif current_volatility > 0.03:
-        warnings_list.append(f"High volatility ({current_volatility*100:.1f}%)")
+        warnings.append(f"High volatility ({current_volatility*100:.1f}%)")
     
     # Score breakdown
     reasoning.append(f"📊 Signal Score: {decision['score']:.0f}/100")
@@ -1304,7 +1202,7 @@ def predict_stock_enhanced(symbol: str):
         signal_strength=decision['signal_strength'],
         score_breakdown=decision['breakdown'],
         reasoning=reasoning,
-        warnings=warnings_list
+        warnings=warnings
     )
 
 # ============================================================================
@@ -1533,6 +1431,7 @@ Features:
   ✅ Per-stock adaptive thresholds
   ✅ Enhanced market regime detection
   ✅ Weighted signal scoring (0-100)
+  ✅ Historical accuracy tracking (NEW)
   ✅ Comparative table format
         """
     )
@@ -1585,8 +1484,12 @@ Features:
         print("   python predict.py --check\n")
         sys.exit(1)
     
+    # NEW: Initialize performance tracker
+    performance_tracker = StockPerformanceTracker()
+    
     print(f"\n🚀 Analyzing {len(symbols)} stocks with Enhanced v2 Model")
     print(f"   📡 Fetching real-time prices from yfinance (with 3 retries per stock)...")
+    print(f"   📊 Using historical accuracy tracking for calibration...")
     print(f"   Analysis Time: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
     print(f"   {'Stock':<8} {'Status':<60} {'Score':>6}")
     
@@ -1596,15 +1499,11 @@ Features:
     for symbol in symbols:
         try:
             print(f"   {symbol:<8}", end="", flush=True)
-            pred = predict_stock_enhanced(symbol)
+            pred = predict_stock_enhanced(symbol, performance_tracker)  # Pass tracker
             predictions.append(pred)
             print(f" ✅ Score: {pred.signal_score:.0f}/100")
         except Exception as e:
-            import traceback
             print(f" ❌ Error: {str(e)}")
-            print(f"\n   DEBUG - Full traceback:")
-            traceback.print_exc()
-            print()
     print("-" * 80)
     
     if not predictions:
@@ -1622,11 +1521,80 @@ Features:
     # Log to CSV
     if not args.no_log:
         log_to_csv(predictions)
-
-
 # ============================================================================
 # ENTRY POINT
 # ============================================================================
 if __name__ == "__main__":
     main()
 
+
+# ============================================================================
+# END OF PART 5/5 - COMPLETE!
+# ============================================================================
+"""
+INSTRUCTIONS TO ASSEMBLE ALL PARTS:
+
+1. Create a new file: predict.py
+
+2. Copy the contents in this order:
+   - Part 1: Environment setup, imports, RealTimePriceFetcher, AdaptiveThresholds
+   - Part 2: EnhancedMarketRegime, ImprovedRiskManagement, WeightedDecisionEngine
+   - Part 3: Technical indicators, MarketDataFetcher, Feature engineering, Data loading
+   - Part 4: predict_stock_enhanced(), log_to_csv(), display functions
+   - Part 5: main() and entry point (this part)
+
+3. Remove all the "PART X/5" comments and "END OF PART X/5" sections
+
+4. Make sure to import at the top (from Part 1):
+   - All the os.environ settings
+   - All imports (numpy, pandas, tensorflow, etc.)
+
+5. Save and run:
+   python predict.py --check          # Check setup
+   python predict.py -s AAPL          # Single stock
+   python predict.py --portfolio      # Multiple stocks
+
+COMPLETE FEATURE LIST:
+✅ Real-time price fetching from yfinance (10-day lookback, fallback to ticker.info)
+✅ 3-retry mechanism with 2-second delays
+✅ Adaptive per-stock thresholds (55-72% based on volatility & regime)
+✅ Enhanced market regime detection (BULL, BEAR, CHOPPY, SIDEWAYS, MIXED)
+✅ Improved R:R calculation (ensures > 1.5:1)
+✅ Weighted signal scoring (0-100 points: probability 40%, R:R 25%, alignment 20%, vol 15%)
+✅ Comparative table for multiple stocks
+✅ Detailed individual analysis
+✅ CSV logging with timestamp
+✅ Command-line arguments (--portfolio, --stocks, --detailed, --table, --no-log, --check)
+
+USAGE EXAMPLES:
+$ python predict.py -s AAPL                    # Analyze Apple
+$ python predict.py -s AAPL MSFT GOOGL        # Compare 3 stocks
+$ python predict.py --portfolio               # Analyze default portfolio (8 stocks)
+$ python predict.py -s TSLA --detailed        # Detailed Tesla analysis
+$ python predict.py --portfolio --no-log      # Don't save to CSV
+$ python predict.py --check                   # Verify model exists
+
+OUTPUT FEATURES:
+- Real-time price display: "✅ Live: $273.40 on 2025-12-27"
+- Fallback message: "⚠️ Using CSV: $272.12 on 2025-12-22 - yfinance failed"
+- Retry progress: "⏳ Retry 1/3..."
+- Comparative table with all metrics
+- Detailed breakdown with reasoning and warnings
+- Summary statistics (best opportunity, average score, R:R, etc.)
+- CSV log file: predictions_log.csv
+
+DEPENDENCIES REQUIRED:
+- tensorflow
+- yfinance
+- pandas
+- numpy
+- sklearn
+- pathlib
+- argparse
+- csv
+- datetime
+- warnings
+- logging
+
+That's it! Your complete Enhanced Stock Predictor v2 is ready! 🚀
+"""
